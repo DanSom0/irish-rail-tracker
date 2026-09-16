@@ -2,6 +2,7 @@
 
 from app.extensions import db
 from app.models import Observation
+from sqlalchemy.exc import SQLAlchemyError
 
 
 def test_health_reports_database_connectivity(client):
@@ -10,6 +11,19 @@ def test_health_reports_database_connectivity(client):
 
     assert response.status_code == 200
     assert response.get_json() == {"database": "connected", "status": "ok"}
+
+
+def test_health_reports_database_disconnection(client, monkeypatch):
+    """The health endpoint returns a non-200 response when PostgreSQL is unreachable."""
+    def raise_database_error(*_args, **_kwargs):
+        raise SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(db.session, "execute", raise_database_error)
+
+    response = client.get("/health")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"database": "disconnected", "status": "unhealthy"}
 
 
 def test_dashboard_renders_observations_and_aggregates(app, client):
