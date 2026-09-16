@@ -34,8 +34,12 @@ def _normalise_train_date(train_date: str) -> str:
 
 
 def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]:
-    """Parse API XML into database-ready observations."""
-    root = ElementTree.fromstring(xml_body)
+    """Parse API XML into database-ready observations without propagating bad XML."""
+    try:
+        root = ElementTree.fromstring(xml_body)
+    except ElementTree.ParseError:
+        logger.warning("invalid station XML", exc_info=True, extra={"station": station})
+        return []
     rows = _station_rows(root)
     logger.info("station XML parsed", extra={"station": station, "entries_parsed": len(rows)})
     observations: list[dict[str, object]] = []
@@ -78,9 +82,13 @@ def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]
 
 
 def fetch_station(station: str, api_url: str, timeout: float) -> list[dict[str, object]]:
-    """Fetch and parse realtime data for one station."""
-    response = requests.get(api_url, params={"StationCode": station}, timeout=timeout)
-    response.raise_for_status()
+    """Fetch and parse realtime data for one station without propagating request errors."""
+    try:
+        response = requests.get(api_url, params={"StationCode": station}, timeout=timeout)
+        response.raise_for_status()
+    except requests.RequestException:
+        logger.warning("station API request failed", exc_info=True, extra={"station": station})
+        return []
     if not response.content.strip():
         logger.warning("empty API response", extra={"station": station})
         return []
