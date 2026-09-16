@@ -1,0 +1,75 @@
+Build a portfolio project for me: an Irish Rail delay tracker. It will be
+on my CV for SRE/DevOps internships, so the repo itself (structure,
+commits, PRs, Actions, README) should look like a professional engineer's.
+
+## Stack
+Python 3.12, Flask, PostgreSQL 16, SQLAlchemy, Docker + docker-compose,
+pytest, GitHub Actions, GitHub Container Registry (GHCR), single AWS EC2
+instance (Ubuntu).
+
+## Data source
+Irish Rail realtime API (XML, no key needed):
+http://api.irishrail.ie/realtime/realtime.asmx
+- Use getStationDataByCodeXML for a small configurable list of major
+  stations (e.g. Connolly, Pearse, Heuston, Tara Street, Malahide).
+  The "Late" field is delay in minutes.
+- Poll every 5 minutes. Handle timeouts, empty responses and bad XML
+  gracefully with logging; never crash the worker.
+
+## Application
+- Two services from one image: `web` (Flask + Gunicorn) and `worker`
+  (scheduled fetcher using APScheduler). Plus `db` (Postgres).
+- Store each observation: station, train code, origin, destination,
+  scheduled time, delay minutes, fetched_at.
+- Dedup: unique on (station, train code, train date); upsert the latest
+  delay so each train is counted once in averages.
+- Dashboard (server-rendered, minimal CSS): current delays table, average
+  delay by station, average delay by route, last updated time.
+- /health returns 200 with DB connectivity status as JSON.
+- Structured logging to stdout.
+- All config via environment variables; include .env.example.
+  No secrets committed anywhere.
+
+## Tests
+- pytest with fixture XML files; tests must never call the live API.
+- Cover: XML parsing, delay calculation, DB inserts/dedup, /health,
+  dashboard route.
+- CI runs tests against a Postgres service container.
+
+## GitHub
+- Repo layout: app/, tests/, .github/workflows/, docker-compose.yml,
+  Dockerfile, .env.example, README.md, AGENTS.md.
+- Workflows:
+  1. ci.yml: on every PR and push. Lint (ruff) + pytest. Must pass.
+  2. deploy.yml: on push to main, after CI passes. Build image, push to
+     ghcr.io tagged with commit SHA and latest, SSH into EC2, log the EC2
+     host into GHCR, pull the new image, `docker compose up -d`, then curl
+     /health and fail the job if it doesn't return 200.
+- Use a GitHub Environment called "production" for deploy secrets.
+- Add Dependabot config for pip, Docker and GitHub Actions.
+- Add a PR template (what changed, how tested).
+- README badges: CI status, deploy status.
+- Deliver work as separate PRs with conventional commit messages
+  (feat:, fix:, ci:, docs:), in this order:
+  1. Flask app, models, fetcher, dashboard, docker-compose (runs locally)
+  2. Tests + ci.yml + Dependabot + PR template
+  3. deploy.yml + production compose file
+  4. README + AGENTS.md
+
+## README
+Project summary, live link placeholder, Mermaid architecture diagram
+(GitHub Actions -> GHCR -> EC2 -> web/worker/db -> Irish Rail API),
+local setup in under 5 commands, how CI/CD works, env var table,
+and a short "design decisions" section.
+
+## Constraints
+Write complete, working code. Keep it simple and conventional. No
+Kubernetes, Terraform, frontend frameworks, auth, or extra features.
+
+## Manual steps
+At the end, give me numbered steps for everything I must do myself:
+- AWS: EC2 instance, security group (22 open with key-only auth, 80
+  open), SSH key, installing Docker, billing alert
+- GitHub: required secrets for the production environment, GHCR
+  permissions, branch protection on main requiring CI to pass,
+  repo description, topics, and pinning the repo on my profile
