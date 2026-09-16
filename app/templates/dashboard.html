@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Irish Rail Delay Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <main>
+      <h1>Irish Rail Delay Tracker</h1>
+      <p class="updated">Last updated: {{ last_updated.strftime('%Y-%m-%d %H:%M UTC') if last_updated else 'No data collected yet' }}</p>
+      <section>
+        <h2>Current delays</h2>
+        <table>
+          <thead><tr><th>Station</th><th>Train</th><th>Route</th><th>Scheduled</th><th>Delay</th></tr></thead>
+          <tbody>
+            {% for observation in current_delays %}
+            <tr><td>{{ observation.station }}</td><td>{{ observation.train_code }}</td><td>{{ observation.origin }} → {{ observation.destination }}</td><td>{{ observation.scheduled_time }}</td><td class="delay">{{ observation.delay_minutes }} min</td></tr>
+            {% else %}
+            <tr><td colspan="5">No observations yet. The worker will populate this table shortly.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+      <div class="summaries">
+        <section><h2>Average delay by station</h2><table><thead><tr><th>Station</th><th>Average</th></tr></thead><tbody>{% for row in by_station %}<tr><td>{{ row.station }}</td><td>{{ '%.1f'|format(row.average_delay) }} min</td></tr>{% else %}<tr><td colspan="2">No data yet.</td></tr>{% endfor %}</tbody></table></section>
+        <section><h2>Average delay by route</h2><table><thead><tr><th>Route</th><th>Average</th></tr></thead><tbody>{% for row in by_route %}<tr><td>{{ row.origin }} → {{ row.destination }}</td><td>{{ '%.1f'|format(row.average_delay) }} min</td></tr>{% else %}<tr><td colspan="2">No data yet.</td></tr>{% endfor %}</tbody></table></section>
+      </div>
+    </main>
+  </body>
+</html>
