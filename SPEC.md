@@ -68,6 +68,7 @@ http://api.irishrail.ie/realtime/realtime.asmx
   3. Terraform infrastructure (infra/)
   4. deploy.yml + production compose file
   5. README + AGENTS.md
+    6. Dashboard polish + delay patterns (after deploy)
 
 ## README
 Project summary, live link placeholder, Mermaid architecture diagram
@@ -76,9 +77,21 @@ Irish Rail API), local setup in under 5 commands, how CI/CD works,
 how to provision infra, env var table, and a short "design decisions"
 section (including why terraform apply is manual).
 
+## PR 6: Dashboard polish and delay patterns
+Only after the app is deployed and has collected a few weeks of data.
+Keep it server-rendered with no JS frameworks.
+- Clean, mobile-friendly CSS; colour-code delays (on time / minor / major)
+- Station filter via query parameter
+- Prominent "data as of X minutes ago"
+- Status section: last successful fetch per station
+- Heatmap of average delay by day of week x hour (Europe/Dublin time,
+  bucketed by scheduled time, not fetched_at), server-rendered SVG,
+  filterable by station
+- Show sample size per cell; grey out cells with too few trains
+
 ## Constraints
 Write complete, working code. Keep it simple and conventional. No
-Kubernetes, frontend frameworks, auth, or extra features.
+Kubernetes, frontend frameworks, auth, or features beyond this spec.
 
 ## Manual steps
 At the end, give me numbered steps for everything I must do myself:
