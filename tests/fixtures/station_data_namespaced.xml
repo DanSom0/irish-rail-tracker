@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ArrayOfObjStationData xmlns="http://api.irishrail.ie/realtime/">
+  <objStationData>
+    <Traincode> A123   </Traincode>
+    <Traindate>16 Sep 2026</Traindate>
+    <Origin>Connolly</Origin>
+    <Destination>Bray</Destination>
+    <Scharrival>09:08</Scharrival>
+    <Schdepart>09:10</Schdepart>
+    <Late>7</Late>
+  </objStationData>
+  <objStationData>
+    <Traincode>T456 </Traincode>
+    <Traindate>16 Sep 2026</Traindate>
+    <Origin>Heuston</Origin>
+    <Destination>Heuston</Destination>
+    <Scharrival>10:30</Scharrival>
+    <Schdepart>00:00</Schdepart>
+    <Late>0</Late>
+  </objStationData>
+</ArrayOfObjStationData>
