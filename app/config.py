@@ -13,7 +13,7 @@ class Config:
     )
     STATION_CODES = tuple(
         code.strip().upper()
-        for code in os.getenv("STATION_CODES", "CNLLY,PERSE,HSTON,TARAJ,MHIDE").split(",")
+        for code in os.getenv("STATION_CODES", "CNLLY,PERSE,HSTON,TARA,MHIDE").split(",")
         if code.strip()
     )
     FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES", "5"))
