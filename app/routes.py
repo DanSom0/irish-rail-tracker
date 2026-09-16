@@ -16,7 +16,7 @@ def health():
         db.session.execute(text("SELECT 1"))
     except Exception:
         current_app.logger.exception("database health check failed")
-        return jsonify(status="unhealthy", database="unavailable"), 503
+        return jsonify(status="unhealthy", database="disconnected"), 503
     return jsonify(status="ok", database="connected")
 
 
