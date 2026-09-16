@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-irishrail}
+      POSTGRES_USER: ${POSTGRES_USER:-irishrail}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-irishrail}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  web:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-irishrail}:${POSTGRES_PASSWORD:-irishrail}@db:5432/${POSTGRES_DB:-irishrail}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-irishrail}:${POSTGRES_PASSWORD:-irishrail}@db:5432/${POSTGRES_DB:-irishrail}
+      STATION_CODES: ${STATION_CODES:-CNLLY,PERSE,HSTON,TARAJ,MHIDE}
+      FETCH_INTERVAL_MINUTES: ${FETCH_INTERVAL_MINUTES:-5}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  postgres_data:
