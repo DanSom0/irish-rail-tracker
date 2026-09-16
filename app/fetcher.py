@@ -14,20 +14,49 @@ logger = logging.getLogger(__name__)
 
 
 def _text(element: ElementTree.Element, name: str) -> str:
-    value = element.findtext(name)
-    return value.strip() if value else ""
+    """Return a child value regardless of the document's XML namespace."""
+    for child in element:
+        if child.tag.rsplit("}", 1)[-1] == name:
+            return child.text.strip() if child.text else ""
+    return ""
+
+
+def _station_rows(root: ElementTree.Element) -> list[ElementTree.Element]:
+    """Find station data rows in namespaced and non-namespaced responses."""
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    path = f".//{{{namespace}}}objStationData" if namespace else ".//objStationData"
+    return root.findall(path)
+
+
+def _normalise_train_date(train_date: str) -> str:
+    """Convert the API's ``16 Sep 2026`` format to a stable deduplication key."""
+    return datetime.strptime(train_date, "%d %b %Y").date().isoformat()
 
 
 def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]:
     """Parse API XML into database-ready observations."""
     root = ElementTree.fromstring(xml_body)
+    rows = _station_rows(root)
+    logger.info("station XML parsed", extra={"station": station, "entries_parsed": len(rows)})
     observations: list[dict[str, object]] = []
-    for row in root.findall(".//objStationData"):
+    for row in rows:
         train_code = _text(row, "Traincode")
-        train_date = _text(row, "Traindate")
-        scheduled_time = _text(row, "Schedtime")
-        if not all((train_code, train_date, scheduled_time)):
+        raw_train_date = _text(row, "Traindate")
+        scheduled_departure = _text(row, "Schdepart")
+        scheduled_arrival = _text(row, "Scharrival")
+        scheduled_time = (
+            scheduled_arrival if scheduled_departure == "00:00" else scheduled_departure
+        )
+        if not all((train_code, raw_train_date, scheduled_time)):
             logger.warning("skipping incomplete train record", extra={"station": station})
+            continue
+        try:
+            train_date = _normalise_train_date(raw_train_date)
+        except ValueError:
+            logger.warning(
+                "skipping invalid train date",
+                extra={"station": station, "train_code": train_code, "train_date": raw_train_date},
+            )
             continue
         try:
             delay_minutes = int(_text(row, "Late") or "0")
