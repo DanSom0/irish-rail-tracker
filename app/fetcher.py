@@ -1,7 +1,7 @@
 """Irish Rail realtime API client and database writer."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from xml.etree import ElementTree
 
 import requests
@@ -30,7 +30,7 @@ def _station_rows(root: ElementTree.Element) -> list[ElementTree.Element]:
 
 def _normalise_train_date(train_date: str) -> str:
     """Convert the API's ``16 Sep 2026`` format to a stable deduplication key."""
-    return datetime.strptime(train_date, "%d %b %Y").date().isoformat()
+    return datetime.strptime(train_date, "%d %b %Y").replace(tzinfo=UTC).date().isoformat()
 
 
 def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]:
@@ -104,7 +104,7 @@ def upsert_observations(observations: list[dict[str, object]]) -> int:
     """Save observations, replacing a previously stored delay for the train."""
     if not observations:
         return 0
-    fetched_at = datetime.now(timezone.utc)
+    fetched_at = datetime.now(UTC)
     statement = insert(Observation).values(
         [{**observation, "fetched_at": fetched_at} for observation in observations]
     )
