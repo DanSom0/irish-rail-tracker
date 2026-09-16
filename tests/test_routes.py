@@ -1,8 +1,9 @@
 """Tests for application HTTP routes."""
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.extensions import db
 from app.models import Observation
-from sqlalchemy.exc import SQLAlchemyError
 
 
 def test_health_reports_database_connectivity(client):
