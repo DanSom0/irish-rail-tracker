@@ -50,3 +50,28 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
       - run: pytest
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.3"
+      - name: Check formatting
+        working-directory: infra
+        run: terraform fmt -check -recursive
+      - name: Initialize without backend
+        working-directory: infra
+        run: terraform init -backend=false
+      - name: Validate configuration
+        working-directory: infra
+        run: terraform validate
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build --tag irish-rail-tracker:ci .
