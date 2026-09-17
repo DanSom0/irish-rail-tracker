@@ -1,0 +1,6 @@
+# Replace the account ID with the one in your manually-created state bucket.
+bucket       = "irish-rail-tracker-tfstate-123456789012"
+key          = "production/terraform.tfstate"
+region       = "eu-west-1"
+encrypt      = true
+use_lockfile = true
