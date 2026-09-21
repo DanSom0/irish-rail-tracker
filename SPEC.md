@@ -6,7 +6,9 @@ commits, PRs, Actions, README) should look like a professional engineer's.
 ## Status
 - PR 1 (core app): merged
 - PR 2 (tests + CI): merged
-- Next: PR 3
+- PR 3 (Terraform infrastructure): merged
+- PR 4 (production deployment + backups): merged
+- Next: PR 5 (README, AGENTS.md, postmortems)
 
 ## Stack
 Python 3.12, Flask, PostgreSQL 16, SQLAlchemy, Alembic, Docker +
