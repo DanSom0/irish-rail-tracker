@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+AWS_CLI_VERSION=2.36.49
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # shellcheck disable=SC1091
 source ./.env
@@ -24,5 +26,5 @@ echo "[backup] Uploading to $destination"
 docker run --rm --env "AWS_REGION=$AWS_REGION" \
   --env AWS_EC2_METADATA_V1_DISABLED=true \
   --volume "$backup_dir:/backups:ro" \
-  amazon/aws-cli:2 s3 cp "/backups/$filename" "$destination" --only-show-errors
+  "amazon/aws-cli:$AWS_CLI_VERSION" s3 cp "/backups/$filename" "$destination" --only-show-errors
 echo "[backup] Uploaded $destination"
