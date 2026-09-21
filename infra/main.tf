@@ -163,6 +163,9 @@ resource "aws_iam_instance_profile" "ec2" {
 }
 
 resource "aws_instance" "app" {
+  lifecycle {
+    ignore_changes = [associate_public_ip_address, ami, user_data]
+  }
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
   subnet_id                   = sort(data.aws_subnets.default.ids)[0]
@@ -195,6 +198,7 @@ resource "aws_instance" "app" {
     encrypted             = true
     volume_type           = "gp3"
     delete_on_termination = true
+    volume_size           = 20
   }
 }
 
