@@ -45,7 +45,7 @@ terraform -chdir=infra validate
 ## Boundaries
 
 - Use conventional commits (`feat:`, `fix:`, `test:`, `ci:`, `docs:`, `chore:`).
-- Never run `terraform apply`, `aws`, or `ssh` commands. Operator runbooks are in README.md.
+- Never run `terraform apply`, `aws`, or `ssh` commands. Server instructions: [docs/operations.md](docs/operations.md).
 - Never commit `.env`, `backend.hcl`, or `terraform.tfvars`.
 - Keep work within the requested PR; migrations and dashboard polish are later work.
 
