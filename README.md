@@ -54,4 +54,4 @@ Open [localhost:8000](http://localhost:8000). The worker calls the live API. See
 
 ## Postmortems
 
-[Zero observations](docs/postmortems/2026-09-zero-observations.md) · [Missing backup image tag](docs/postmortems/2026-09-backup-image-tag.md)
+[Zero observations](docs/postmortems/2026-09-zero-observations.md) · [Missing backup image tag](docs/postmortems/2026-09-backup-image-tag.md) · [Instance replacement](docs/postmortems/2026-09-instance-replacement.md)
