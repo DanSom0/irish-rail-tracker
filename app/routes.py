@@ -13,13 +13,27 @@ from flask import (
     request,
     url_for,
 )
-from sqlalchemy import func, text
+from sqlalchemy import DateTime, case, cast, func, text, tuple_
 
 from app.extensions import db
 from app.models import Observation
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
+STATION_NAMES = {
+    "CNLLY": "Dublin Connolly", "PERSE": "Dublin Pearse", "HSTON": "Dublin Heuston",
+    "TARA": "Tara Street", "MHIDE": "Malahide",
+}
+
+
+@dashboard.app_template_filter("station_name")
+def station_name(code):
+    return STATION_NAMES.get(code, f"Unlisted station ({code})")
+
+
+@dashboard.app_template_filter("place_name")
+def place_name(value):
+    return STATION_NAMES.get(value, value)
 
 
 @dashboard.app_template_filter("dublin_time")
@@ -50,9 +64,6 @@ def _context(station="", *, strict=False):
         Observation.station,
         func.max(Observation.fetched_at).label("last_fetch"),
         func.count().filter(recent).label("readings"),
-        func.count().filter(recent, Observation.delay_minutes.between(0, 1)).label("on_time"),
-        func.count().filter(recent, Observation.delay_minutes >= 6).label("major"),
-        func.sum(Observation.delay_minutes).filter(recent).label("delay_sum"),
         func.avg(Observation.delay_minutes).filter(recent).label("average_delay"),
         func.avg(Observation.delay_minutes).filter(today).label("today_average"),
     ).group_by(Observation.station).order_by(Observation.station)).all()
@@ -79,46 +90,88 @@ def _context(station="", *, strict=False):
     active = [row for row in selected if row.readings]
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max((row.last_fetch for row in selected), default=None)
-    return {
+    context = {
         "stations": stations, "station": station, "station_status": station_status,
         "highest_delay": highest_delay, "last_updated": last_updated,
         "age_minutes": max(0, int((now - last_updated).total_seconds() // 60))
         if last_updated else None,
         "network": {
             "readings": readings,
-            "on_time": 100 * sum(row.on_time for row in selected) / readings if readings else None,
-            "average_delay": sum(row.delay_sum or 0 for row in selected) / readings
-            if readings else None,
-            "major": sum(row.major for row in selected),
             "reporting": len(active), "total": 1 if station else len(stations),
         },
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
         "today_date": local_now.date().isoformat(), "cutoff": cutoff, "now": now,
     }
-
-
-def _daily_summary(context):
-    query = db.select(
-        func.count(func.distinct(Observation.train_code)).label("trains"),
-        (100.0 * func.count().filter(Observation.delay_minutes.between(0, 1))
-         / func.nullif(func.count(), 0)).label("on_time"),
-        func.avg(Observation.delay_minutes).label("average_delay"),
-    ).where(Observation.train_date == context["today_date"])
-    if context["station"]:
-        query = query.where(Observation.station == context["station"])
-    return db.session.execute(query).one()
-
-
-def _services(context):
-    query = db.select(
-        Observation.station, Observation.train_code, Observation.origin,
-        Observation.destination, Observation.scheduled_time, Observation.delay_minutes,
-    ).where(Observation.fetched_at.between(context["cutoff"], context["now"]))
-    if context["station"]:
-        query = query.where(Observation.station == context["station"])
-    return query.order_by(
-        Observation.delay_minutes.desc(), Observation.fetched_at.desc(), Observation.id,
+    current = _train_summary(context, recent=True)
+    context["network"].update(
+        trains=current.trains, on_time=current.on_time,
+        average_delay=current.average_delay, major=current.major,
     )
+    return context
+
+
+def _latest_readings(context, *, recent=False):
+    """One latest stored station reading per train/date, within the selected scope."""
+    query = db.select(Observation).where(Observation.fetched_at <= context["now"])
+    if recent:
+        query = query.where(Observation.fetched_at >= context["cutoff"])
+    else:
+        query = query.where(Observation.train_date == context["today_date"])
+    if context["station"]:
+        query = query.where(Observation.station == context["station"])
+    return query.distinct(Observation.train_code, Observation.train_date).order_by(
+        Observation.train_code, Observation.train_date,
+        Observation.fetched_at.desc(), Observation.id.desc(),
+    ).subquery()
+
+
+def _train_summary(context, *, recent=False):
+    latest = _latest_readings(context, recent=recent).c
+    return db.session.execute(db.select(
+        func.count().label("trains"),
+        (100.0 * func.count().filter(latest.delay_minutes.between(0, 1))
+         / func.nullif(func.count(), 0)).label("on_time"),
+        func.avg(latest.delay_minutes).label("average_delay"),
+        func.count().filter(latest.delay_minutes >= 6).label("major"),
+    )).one()
+
+
+def _services(context, view="delays"):
+    latest = _latest_readings(context, recent=True).c
+    query = db.select(*latest)
+    if view == "next":
+        # Stored times can include arrivals; only valid local schedules support this view.
+        scheduled = case((
+            latest.scheduled_time.op("~")(r"^([01][0-9]|2[0-3]):[0-5][0-9]$"),
+            cast(latest.train_date + " " + latest.scheduled_time, DateTime),
+        ))
+        expected = func.timezone("Europe/Dublin", scheduled) + (
+            latest.delay_minutes * text("INTERVAL '1 minute'")
+        )
+        return query.where(expected >= context["now"]).order_by(expected, latest.id)
+    return query.order_by(
+        latest.delay_minutes.desc(), latest.fetched_at.desc(), latest.id.desc(),
+    )
+
+
+def _reading_details(rows, now):
+    """Load available earlier station readings in one query, not one per service."""
+    if not rows:
+        return {}
+    readings = db.session.execute(db.select(Observation).where(
+        tuple_(Observation.train_code, Observation.train_date).in_(
+            [(row.train_code, row.train_date) for row in rows]
+        ),
+        Observation.fetched_at <= now,
+    ).order_by(Observation.fetched_at.desc(), Observation.id.desc())).scalars().all()
+    grouped = {}
+    for reading in readings:
+        grouped.setdefault((reading.train_code, reading.train_date), []).append(reading)
+    return {
+        row.id: [reading for reading in grouped[(row.train_code, row.train_date)]
+                 if reading.id != row.id and reading.fetched_at <= row.fetched_at]
+        for row in rows
+    }
 
 
 def _paginate(query, per_page=15):
@@ -137,10 +190,11 @@ def _paginate(query, per_page=15):
 @dashboard.get("/")
 def index():
     context = _context(request.args.get("station", ""))
+    services = db.session.execute(_services(context).limit(5)).all()
     return render_template(
         "dashboard.html", title="Overview", active="overview", **context,
-        summary=_daily_summary(context),
-        current_delays=db.session.execute(_services(context).limit(5)).all(),
+        summary=_train_summary(context), current_delays=services,
+        reading_details=_reading_details(services, context["now"]),
     )
 
 
@@ -155,27 +209,28 @@ def stations():
 @dashboard.get("/stations/<code>")
 def station_detail(code):
     context = _context(code, strict=True)
+    view = "next" if request.args.get("view", "next") == "next" else "delays"
+    pagination = _paginate(_services(context, view))
     return render_template(
-        "station.html", title=f"{code} station", active="stations", **context,
-        summary=_daily_summary(context), pagination=_paginate(_services(context)),
+        "station.html", title=station_name(code), active="stations", **context,
+        summary=_train_summary(context), pagination=pagination, view=view,
+        reading_details=_reading_details(pagination["items"], context["now"]),
     )
 
 
 @dashboard.get("/routes")
 def route_averages():
     context = _context(request.args.get("station", ""))
+    latest = _latest_readings(context).c
     query = db.select(
-        Observation.origin, Observation.destination,
-        func.avg(Observation.delay_minutes).label("average_delay"),
-        func.count().label("readings"),
-    ).where(Observation.train_date == context["today_date"])
-    if context["station"]:
-        query = query.where(Observation.station == context["station"])
-    query = query.group_by(Observation.origin, Observation.destination).order_by(
-        func.avg(Observation.delay_minutes).desc(), Observation.origin, Observation.destination,
+        latest.origin, latest.destination,
+        func.avg(latest.delay_minutes).label("average_delay"),
+        func.count().label("trains"),
+    ).group_by(latest.origin, latest.destination).order_by(
+        func.avg(latest.delay_minutes).desc(), latest.origin, latest.destination,
     )
     return render_template(
-        "routes.html", title="Routes", active="routes", **context,
+        "routes.html", title="Route performance", active="routes", **context,
         pagination=_paginate(query),
     )
 
