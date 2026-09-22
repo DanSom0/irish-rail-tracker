@@ -11,3 +11,5 @@ infra/terraform.tfvars
 infra/backend.hcl
 infra/tfplan
 .DS_Store
+.agents/
+skills-lock.json
