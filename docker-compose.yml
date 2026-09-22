@@ -15,6 +15,7 @@ services:
   web:
     build: .
     environment:
+      STATION_CODES: ${STATION_CODES:-CNLLY,PERSE,HSTON,TARA,MHIDE}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-irishrail}:${POSTGRES_PASSWORD:-irishrail}@db:5432/${POSTGRES_DB:-irishrail}
     ports:
       - "${WEB_PORT:-8000}:8000"
