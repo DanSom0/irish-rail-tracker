@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% from 'components.html' import freshness, daily, services, station_filter, pagination_links %}
+{% block content %}
+<div class="page-heading"><a class="back-link" href="{{ url_for('dashboard.stations') }}">← All stations</a><h1>{{ station }} <span class="heading-light">station</span></h1><p>Current services and today's performance.</p></div>
+{{ freshness(last_updated, age_minutes) }}
+{{ station_filter(stations, station, 'dashboard.stations', 'Change station', 'Go') }}
+<section class="card" aria-labelledby="services-heading">
+  <div class="section-heading card-heading"><div><h2 id="services-heading">Current services <span class="count">{{ pagination.total }}</span></h2><p>Last 30 minutes · largest delays first · scheduled times Europe/Dublin</p></div></div>
+  {{ services(pagination['items']) }}
+  {{ pagination_links(pagination, 'dashboard.station_detail', code=station) }}
+</section>
+<p class="note below-card"><a href="{{ url_for('dashboard.route_averages', station=station) }}">View today's routes through {{ station }} →</a></p>
+{{ daily(summary, today) }}
+{% endblock %}

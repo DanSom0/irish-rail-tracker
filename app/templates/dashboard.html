@@ -1,133 +1,23 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="refresh" content="60">
-    <meta name="color-scheme" content="light dark">
-    <title>Irish Rail Delay Tracker</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to dashboard</a>
-    <header class="page-header shell">
-      <div>
-        <p class="eyebrow">Dublin rail network</p>
-        <h1>Irish Rail Delay Tracker</h1>
-        <p class="description">Live delays across Dublin rail stations, updated every 5 minutes</p>
-      </div>
-      <a class="repo-link" href="https://github.com/DanSom0/irish-rail-tracker">View on GitHub <span aria-hidden="true">↗</span></a>
-    </header>
-    <main id="main" class="shell">
-      <section class="freshness card" aria-labelledby="freshness-heading">
-        <div>
-          <h2 id="freshness-heading">{% if last_updated %}Data as of {{ age_minutes }} minute{{ '' if age_minutes == 1 else 's' }} ago{% else %}No data yet{% endif %}</h2>
-          <p>{% if last_updated %}<time datetime="{{ last_updated.isoformat() }}">{{ last_updated|dublin_time }}</time>{% else %}Waiting for the first station observations.{% endif %}</p>
-        </div>
-        <span class="refresh-note">Page refreshes every 60 seconds</span>
-      </section>
-
-      <div class="section-heading">
-        <h2>Today at a glance</h2>
-        <p>{{ today }} · Europe/Dublin{% if station %} · {{ station }}{% endif %}</p>
-      </div>
-      <div class="metrics">
-        <section class="card metric" aria-labelledby="trains-label">
-          <h3 id="trains-label">Trains tracked today</h3>
-          <p class="metric-value" id="trains-value">{{ summary.trains if summary.trains else 'No data yet' }}</p>
-          <p>Unique train services</p>
-        </section>
-        <section class="card metric" aria-labelledby="on-time-label">
-          <h3 id="on-time-label">On time today</h3>
-          <p class="metric-value" id="on-time-value">{{ '%.0f%%'|format(summary.on_time) if summary.on_time is not none else 'No data yet' }}</p>
-          <p>Station readings with 0–1 min delay</p>
-        </section>
-        <section class="card metric" aria-labelledby="average-label">
-          <h3 id="average-label">Average delay today</h3>
-          <p class="metric-value" id="average-value">{% if summary.average_delay is not none %}{{ '%.1f'|format(summary.average_delay) }} <span>min</span>{% else %}No data yet{% endif %}</p>
-          <p>Across today's station readings</p>
-        </section>
-        <section class="card metric" aria-labelledby="highest-label">
-          <h3 id="highest-label">Highest average right now</h3>
-          <p class="metric-value" id="highest-value">{{ highest_delay.station if highest_delay else 'No data yet' }}</p>
-          <p>{% if highest_delay %}{{ '%.1f'|format(highest_delay.average_delay) }} min average · last 30 minutes{% else %}No readings in the last 30 minutes{% endif %}</p>
-        </section>
-      </div>
-
-      <form class="station-filter" method="get" action="{{ url_for('dashboard.index') }}">
-        <div>
-          <label for="station">Station</label>
-          <select name="station" id="station">
-            <option value="">All stations</option>
-            {% for code in stations %}<option value="{{ code }}"{{ ' selected' if code == station else '' }}>{{ code }}</option>{% endfor %}
-          </select>
-          <button type="submit">Apply filter</button>
-        </div>
-        <p>{% if station %}Showing {{ station }}{% else %}Showing all stations{% endif %} · summaries and delays</p>
-      </form>
-
-      <section class="card data-section" aria-labelledby="current-heading">
-        <div class="card-heading">
-          <div><h2 id="current-heading">Current delays</h2><p>Latest 100 station readings from the last 30 minutes</p></div>
-          <div class="legend" aria-label="Delay categories">
-            <span class="badge on-time">On time · 0–1 min</span>
-            <span class="badge minor">Minor · 2–5 min</span>
-            <span class="badge major">Major · 6+ min</span>
-          </div>
-        </div>
-        <div class="table-scroll" role="region" aria-labelledby="current-heading" tabindex="0">
-          <table>
-            <thead><tr><th scope="col">Station</th><th scope="col">Train</th><th scope="col">Route</th><th scope="col">Scheduled <small>Europe/Dublin</small></th><th scope="col">Delay</th></tr></thead>
-            <tbody>
-              {% for observation in current_delays %}
-              <tr>
-                <th scope="row">{{ observation.station }}</th>
-                <td class="train-code">{{ observation.train_code }}</td>
-                <td>{{ observation.origin }} <span class="route-arrow" aria-label="to">→</span> {{ observation.destination }}</td>
-                <td>{{ observation.scheduled_time }}</td>
-                <td><span class="badge {{ 'on-time' if observation.delay_minutes <= 1 else 'minor' if observation.delay_minutes <= 5 else 'major' }}">{{ observation.delay_minutes }} min · {{ 'Early' if observation.delay_minutes < 0 else 'On time' if observation.delay_minutes <= 1 else 'Minor' if observation.delay_minutes <= 5 else 'Major' }}</span></td>
-              </tr>
-              {% else %}
-              <tr><td class="empty" colspan="5">No recent data yet. New station readings will appear here automatically.</td></tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        <p class="table-note">Delays are the last polled reading, not a confirmed final arrival delay. Scheduled times are local to Europe/Dublin.</p>
-      </section>
-
-      <div class="summaries">
-        <section class="card data-section" aria-labelledby="station-heading">
-          <div class="card-heading"><div><h2 id="station-heading">Average delay by station</h2><p>Today's station readings</p></div></div>
-          <div class="table-scroll" role="region" aria-labelledby="station-heading" tabindex="0">
-            <table><thead><tr><th scope="col">Station</th><th scope="col" class="numeric">Average delay</th></tr></thead>
-              <tbody>{% for row in by_station %}<tr><th scope="row">{{ row.station }}</th><td class="numeric">{{ '%.1f'|format(row.average_delay) }} min</td></tr>{% else %}<tr><td class="empty" colspan="2">No data yet for today.</td></tr>{% endfor %}</tbody>
-            </table>
-          </div>
-        </section>
-        <section class="card data-section" aria-labelledby="route-heading">
-          <div class="card-heading"><div><h2 id="route-heading">Average delay by route</h2><p>Today's station readings</p></div></div>
-          <div class="table-scroll" role="region" aria-labelledby="route-heading" tabindex="0">
-            <table><thead><tr><th scope="col">Route</th><th scope="col" class="numeric">Average delay</th></tr></thead>
-              <tbody>{% for row in by_route %}<tr><th scope="row" class="route-name">{{ row.origin }} <span class="route-arrow" aria-label="to">→</span> {{ row.destination }}</th><td class="numeric">{{ '%.1f'|format(row.average_delay) }} min</td></tr>{% else %}<tr><td class="empty" colspan="2">No data yet for today.</td></tr>{% endfor %}</tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-
-      <section class="card data-section" aria-labelledby="status-heading">
-        <div class="card-heading"><div><h2 id="status-heading">Station status</h2><p>All stations · last successful fetch with stored data</p></div><span class="subtle">{{ 'Daytime monitoring' if service_hours else 'Overnight · alerts paused' }}</span></div>
-        <p class="status-note">Flagged after 30 minutes without data, only between 06:00 and 23:30 Europe/Dublin. Empty successful fetches are not recorded.</p>
-        <div class="table-scroll" role="region" aria-labelledby="status-heading" tabindex="0">
-          <table>
-            <thead><tr><th scope="col">Station</th><th scope="col">Last successful fetch <small>Europe/Dublin</small></th><th scope="col">Status</th></tr></thead>
-            <tbody>{% for row in station_status %}
-              <tr><th scope="row">{{ row.station }}</th><td>{% if row.last_fetch %}<time datetime="{{ row.last_fetch.isoformat() }}">{{ row.last_fetch|dublin_time }}</time>{% else %}No data yet{% endif %}</td><td><span class="badge {{ 'major' if row.stale else 'neutral' if not service_hours else 'on-time' }}">{{ 'No recent data' if row.stale else 'Overnight · alerts paused' if not service_hours else 'Up to date' }}</span></td></tr>
-            {% else %}<tr><td class="empty" colspan="3">No stations configured.</td></tr>{% endfor %}</tbody>
-          </table>
-        </div>
-      </section>
-      <footer>Irish Rail realtime data <span aria-hidden="true">·</span> All times Europe/Dublin</footer>
-    </main>
-  </body>
-</html>
+{% extends 'base.html' %}
+{% from 'components.html' import freshness, daily, services, station_filter %}
+{% block content %}
+<div class="page-heading"><p class="eyebrow">Network overview{% if station %} · {{ station }}{% endif %}</p><h1>{{ station if station else 'Dublin' }}, right now.</h1></div>
+<section class="network-card" aria-labelledby="network-heading">
+  <div class="network-intro"><h2 id="network-heading">Last 30 minutes</h2><span class="coverage">{{ network.reporting }}/{{ network.total }} stations reporting</span></div>
+  {% if network.readings %}
+  <div class="network-main">
+    <div class="headline"><strong>{{ '%.0f'|format(network.on_time) }}<span>%</span></strong><p>of station readings on time</p></div>
+    <dl class="network-facts"><div><dt>Average delay</dt><dd>{{ '%.1f'|format(network.average_delay) }} <span>min</span></dd></div><div><dt>Delays of 6+ min</dt><dd>{{ network.major }} <span>readings</span></dd></div></dl>
+  </div>
+  <div class="network-bottom" id="network-answer"><p>Highest station average: <a href="{{ url_for('dashboard.station_detail', code=highest_delay.station) }}">{{ highest_delay.station }}</a> <strong>{{ '%.1f'|format(highest_delay.average_delay) }} min</strong></p><p>On time = 0–1 min · {{ network.readings }} readings</p></div>
+  {% else %}<div class="network-empty" id="network-answer"><h2>No recent data yet</h2><p>We can't report current delays until new station readings arrive.</p><a href="{{ url_for('dashboard.status') }}">Check data status →</a></div>{% endif %}
+  {% if network.reporting < network.total %}<p class="coverage-note">{{ network.total-network.reporting }} station{{ '' if network.total-network.reporting == 1 else 's' }} without recent data. <a href="{{ url_for('dashboard.status') }}">Check coverage →</a></p>{% endif %}
+</section>
+{{ freshness(last_updated, age_minutes) }}
+{{ daily(summary, today) }}
+<section class="card" aria-labelledby="delays-heading">
+  <div class="section-heading card-heading"><div><h2 id="delays-heading">Largest current delays</h2><p>Up to 5 latest station readings, ranked by delay</p></div><a href="{{ url_for('dashboard.stations') }}">Explore stations →</a></div>
+  {{ services(current_delays) }}
+</section>
+<details class="overview-filter"{% if station %} open{% endif %}><summary>Filter overview by station{% if station %} · {{ station }}{% endif %}</summary>{{ station_filter(stations, station, 'dashboard.index') }}</details>
+{% endblock %}

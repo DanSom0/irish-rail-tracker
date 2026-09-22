@@ -1,0 +1,4 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="not-found card"><p class="eyebrow">404 · Page not found</p><h1>That stop isn't on the board.</h1><p>The station or page you requested doesn't exist. Choose a station to get back on track.</p><div class="error-links"><a class="button" href="{{ url_for('dashboard.stations') }}">Browse stations</a><a href="{{ url_for('dashboard.index') }}">Back to overview →</a></div></section>
+{% endblock %}

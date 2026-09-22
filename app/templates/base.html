@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="60">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ title }} · Irish Rail Delay Tracker</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="shell brand-row">
+      <a class="brand" href="{{ url_for('dashboard.index') }}"><span class="brand-mark" aria-hidden="true">IR</span> Irish Rail Delay Tracker</a>
+      <a class="repo-link" href="https://github.com/DanSom0/irish-rail-tracker">GitHub <span aria-hidden="true">↗</span></a>
+    </div>
+    <nav class="shell primary-nav" aria-label="Main navigation">
+      {% for key, label, endpoint in [('overview', 'Overview', 'dashboard.index'), ('stations', 'Stations', 'dashboard.stations'), ('routes', 'Routes', 'dashboard.route_averages'), ('status', 'Data status', 'dashboard.status')] %}
+      <a href="{{ url_for(endpoint) }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </header>
+  <main id="main" class="shell">{% block content %}{% endblock %}</main>
+  <footer class="shell site-footer">
+    <p>Irish Rail realtime data · Europe/Dublin</p>
+    <p>Polled every 5 minutes · Page refreshes every 60 seconds</p>
+    <p>Delays are the last polled reading, not confirmed final arrival delays.</p>
+  </footer>
+</body>
+</html>

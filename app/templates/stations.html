@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% from 'components.html' import freshness, station_filter %}
+{% block content %}
+<div class="page-heading"><p class="eyebrow">Explore the network</p><h1>Stations</h1><p>Compare delays, then open a station for its current services.</p></div>
+{{ freshness(last_updated, age_minutes) }}
+{{ station_filter(stations, station, 'dashboard.stations', 'Open a station', 'Go') }}
+<section class="card" aria-labelledby="stations-heading">
+  <div class="section-heading card-heading"><h2 id="stations-heading">{{ stations|length }} stations</h2><span>Current = last 30 minutes</span></div>
+  <div class="table-scroll" role="region" aria-labelledby="stations-heading" tabindex="0">
+    <table class="station-table"><thead><tr><th scope="col">Station</th><th scope="col" class="numeric">Current avg.</th><th scope="col" class="numeric">Today avg.</th></tr></thead><tbody>
+      {% for row in station_status %}<tr><th scope="row"><a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station }} <span aria-hidden="true">→</span></a><small>{{ row.readings }} recent readings</small></th><td class="numeric">{{ '%.1f min'|format(row.average_delay) if row.average_delay is not none else 'No data' }}</td><td class="numeric">{{ '%.1f min'|format(row.today_average) if row.today_average is not none else 'No data' }}</td></tr>
+      {% else %}<tr><td colspan="3" class="empty">No stations configured.</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+</section>
+{% endblock %}
