@@ -16,18 +16,17 @@
       <a class="brand" href="{{ url_for('dashboard.index') }}"><span class="brand-mark" aria-hidden="true"></span><span>Irish Rail <span class="wordmark-light">Delay Tracker</span></span></a>
     </div>
     <nav class="shell primary-nav" aria-label="Main navigation">
-      {% for key, label, endpoint in [('overview', 'Overview', 'dashboard.index'), ('stations', 'Stations', 'dashboard.stations'), ('routes', 'Route performance', 'dashboard.route_averages'), ('status', 'Data status', 'dashboard.status')] %}
+      {% for key, label, endpoint in [('overview', 'Overview', 'dashboard.index'), ('stations', 'Stations', 'dashboard.stations'), ('routes', 'Route performance', 'dashboard.route_averages')] %}
       <a href="{{ url_for(endpoint) }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
+      <a class="data-health{{ ' limited' if coverage.reporting < coverage.total else '' }}" href="{{ url_for('dashboard.status') }}"{% if active == 'status' %} aria-current="page"{% endif %}>● {{ 'Limited coverage' if coverage.reporting < coverage.total else 'Data up to date' }}</a>
     </nav>
   </header>
   <main id="main" class="shell">{% block content %}{% endblock %}</main>
   <footer class="shell site-footer">
-    <p>Independent project, not affiliated with Iarnród Éireann. Built on their public realtime API.</p>
-    <p>Maintained by <a href="https://github.com/DanSom0">Daniel English (DanSom0)</a> · <a href="https://github.com/DanSom0/irish-rail-tracker">GitHub ↗</a></p>
-    <p>Coverage: selected stations in the Dublin area — <a href="{{ url_for('dashboard.stations') }}">see all tracked stations</a>. All times Europe/Dublin.</p>
-    <p>The delay figure is the last reading before a train leaves the departure board, not a confirmed arrival delay. While a train is still on the board, its reading can change.</p>
-    <p>Page refreshes every 60 seconds.</p>
+    <p>Independent project, not affiliated with Iarnród Éireann. Built and maintained by <a href="https://github.com/DanSom0">Daniel English</a>.</p>
+    <p><a href="{{ url_for('dashboard.about_data') }}">How the data works</a> · <a href="https://github.com/DanSom0/irish-rail-tracker">GitHub</a> · <a href="https://github.com/DanSom0/irish-rail-tracker/issues/new">Report a problem</a></p>
+    <p>Europe/Dublin times · Refreshes every 60 seconds.</p>
   </footer>
 </body>
 </html>

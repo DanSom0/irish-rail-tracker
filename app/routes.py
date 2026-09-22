@@ -17,23 +17,65 @@ from sqlalchemy import DateTime, case, cast, func, text, tuple_
 
 from app.extensions import db
 from app.models import Observation
+from app.stations import STATION_NAMES
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
-STATION_NAMES = {
-    "CNLLY": "Dublin Connolly", "PERSE": "Dublin Pearse", "HSTON": "Dublin Heuston",
-    "TARA": "Tara Street", "MHIDE": "Malahide",
-}
 
 
 @dashboard.app_template_filter("station_name")
 def station_name(code):
-    return STATION_NAMES.get(code, f"Unlisted station ({code})")
+    return STATION_NAMES.get(code, code)
+
+
+@dashboard.app_template_filter("sort_stations")
+def sort_stations(codes):
+    return sorted(codes, key=lambda code: (station_name(code).casefold(), code))
 
 
 @dashboard.app_template_filter("place_name")
 def place_name(value):
     return STATION_NAMES.get(value, value)
+
+
+@dashboard.app_template_filter("service_kind")
+def service_kind(row):
+    """Infer board direction from place names; old readings need no new storage."""
+    name = station_name(row.station).casefold()
+
+    def matches(value):
+        return place_name(value.strip().upper()).casefold() == name or value.strip().casefold() == name
+
+    if matches(row.destination):
+        return "Terminates here"
+    if matches(row.origin):
+        return "Starts here"
+    return "Calling service"
+
+
+@dashboard.after_request
+def remember_station(response):
+    code = request.args.get("station") if request.endpoint == "dashboard.stations" else None
+    if request.endpoint == "dashboard.station_detail":
+        code = request.view_args["code"]
+    if code and response.status_code in (200, 302) and (
+        code in STATION_NAMES or code in current_app.config["STATION_CODES"]
+    ):
+        response.set_cookie("station", code, max_age=90 * 24 * 60 * 60,
+                            httponly=True, samesite="Lax", secure=request.is_secure)
+    return response
+
+
+@dashboard.get("/forget-station")
+def forget_station():
+    response = redirect(url_for("dashboard.index"))
+    response.delete_cookie("station", httponly=True, samesite="Lax")
+    return response
+
+
+@dashboard.get("/about/data")
+def about_data():
+    return render_template("about_data.html", title="How the data works", active="", **_context())
 
 
 @dashboard.app_template_filter("dublin_time")
@@ -68,8 +110,8 @@ def _context(station="", *, strict=False):
         func.avg(Observation.delay_minutes).filter(today).label("today_average"),
     ).group_by(Observation.station).order_by(Observation.station)).all()
     observed = {row.station: row for row in rows}
-    stations = sorted(set(current_app.config["STATION_CODES"]) | observed.keys())
-    if station not in stations:
+    stations = sort_stations(set(current_app.config["STATION_CODES"]) | observed.keys())
+    if station not in stations and station not in STATION_NAMES:
         if strict:
             abort(404)
         station = ""
@@ -90,7 +132,15 @@ def _context(station="", *, strict=False):
     active = [row for row in selected if row.readings]
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max((row.last_fetch for row in selected), default=None)
+    configured = set(current_app.config["STATION_CODES"])
+    coverage = {
+        "reporting": sum(bool(observed[code].readings) for code in configured if code in observed),
+        "total": len(configured),
+    }
+    remembered = request.cookies.get("station", "")
     context = {
+        "coverage": coverage,
+        "remembered_station": remembered if remembered in stations or remembered in STATION_NAMES else "",
         "stations": stations, "station": station, "station_status": station_status,
         "highest_delay": highest_delay, "last_updated": last_updated,
         "age_minutes": max(0, int((now - last_updated).total_seconds() // 60))
@@ -238,7 +288,6 @@ def route_averages():
 @dashboard.get("/status")
 def status():
     context = _context()
-    context["station_status"].sort(key=lambda row: (not row["stale"], row["station"]))
     return render_template("status.html", title="Data status", active="status", **context)
 
 
@@ -246,5 +295,5 @@ def status():
 def not_found(error):
     return render_template(
         "404.html", title="Page not found",
-        active="stations" if request.path.startswith("/stations/") else "",
+        active="stations" if request.path.startswith("/stations/") else "", **_context(),
     ), 404

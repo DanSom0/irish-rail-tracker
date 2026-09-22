@@ -1,7 +1,7 @@
 {% macro freshness(last_updated, age_minutes) %}
 <div class="freshness">
   {% if last_updated %}<strong>Updated {{ age_minutes }} minute{{ '' if age_minutes == 1 else 's' }} ago</strong><time datetime="{{ last_updated.isoformat() }}">{{ last_updated|dublin_time }}</time>
-  {% else %}<strong>No data yet</strong><span>Waiting for station readings.</span>{% endif %}
+  {% else %}<strong>No recent readings</strong><span>Waiting for station readings.</span>{% endif %}
 </div>
 {% endmacro %}
 
@@ -24,7 +24,7 @@
 {% macro station_filter(stations, station, endpoint, label='Station', button='Apply', all_stations=true) %}
 <form class="station-filter" method="get" action="{{ url_for(endpoint) }}">
   <label for="station">{{ label }}</label>
-  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}</option>{% endfor %}</select>
+  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in (stations + ([station] if station and station not in stations else []))|sort_stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}</option>{% endfor %}</select>
   <button type="submit">{{ button }}</button>
 </form>
 {% endmacro %}
@@ -32,13 +32,14 @@
 {% macro services(rows, reading_details, station='') %}
 <table class="departure-board">
   <caption class="visually-hidden">Scheduled services, destinations and latest reported delays</caption>
-  <thead><tr><th scope="col">Time</th><th scope="col">Destination</th><th scope="col" class="numeric">Delay</th></tr></thead>
+  <thead><tr><th scope="col">Scheduled</th><th scope="col">Destination</th><th scope="col" class="numeric">Delay</th></tr></thead>
   <tbody>
   {% for row in rows %}
   <tr>
     <td class="service-time">{{ row.scheduled_time }}</td>
-    <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if not station %}<small>Latest reading at <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
-      <details class="reading-details"><summary>Reading details <span class="train-code">· {{ row.train_code }}</span></summary>
+    <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if station %}<small>{{ row|service_kind }}</small>{% endif %}{% if not station %}<small>At <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
+      <details class="reading-details"><summary>Details</summary>
+        <p>Train {{ row.train_code }}</p>
         <p>From {{ row.origin|place_name }} · {{ row.train_date }}</p>
         <p>Updated <time datetime="{{ row.fetched_at.isoformat() }}">{{ row.fetched_at|dublin_time }}</time></p>
         {% if reading_details.get(row.id) %}<ul>{% for reading in reading_details[row.id] %}<li>{{ reading.station|station_name }} · {{ delay_badge(reading.delay_minutes) }}<br><time datetime="{{ reading.fetched_at.isoformat() }}">{{ reading.fetched_at|dublin_time }}</time></li>{% endfor %}</ul>{% endif %}
@@ -47,7 +48,7 @@
     </th>
     <td class="numeric">{{ delay_badge(row.delay_minutes) }}</td>
   </tr>
-  {% else %}<tr><td colspan="3" class="empty">No services to show in this view. Try another view or check again after the next update.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="3" class="empty">No recent readings match this view. Try another view or check again after the next update.</td></tr>{% endfor %}
   </tbody>
 </table>
 {% endmacro %}
@@ -60,4 +61,8 @@
   {% if pagination.page < pagination.pages %}<a href="{{ url_for(endpoint, page=pagination.page+1, station=station, code=code, view=view) }}" rel="next">Next →</a>{% else %}<span></span>{% endif %}
 </nav>
 {% endif %}
+{% endmacro %}
+
+{% macro coverage_label(coverage) %}
+<span class="coverage{{ ' limited' if coverage.reporting < coverage.total else '' }}">{% if coverage.reporting < coverage.total %}Limited coverage · {{ coverage.reporting }} of {{ coverage.total }} stations reporting{% else %}All {{ coverage.total }} stations reporting{% endif %}</span>
 {% endmacro %}

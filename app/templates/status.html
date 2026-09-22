@@ -1,13 +1,13 @@
 {% extends 'base.html' %}
-{% from 'components.html' import freshness %}
+{% from 'components.html' import freshness, coverage_label %}
 {% block content %}
 <div class="page-heading"><p class="eyebrow">Collection health</p><h1>Data status</h1><p>How recently each station supplied observations.</p></div>
 {{ freshness(last_updated, age_minutes) }}
-<section class="status-summary card"><h2>{{ station_status|selectattr('stale')|list|length }} stations flagged{% if not service_hours %} · alerts paused{% endif %}</h2><p>{{ 'Daytime monitoring' if service_hours else 'Overnight · alerts paused' }} · {{ network.reporting }}/{{ network.total }} stations with recent data</p><p class="note">Flagged after 30 minutes without data, only between 06:00 and 23:30 Europe/Dublin. Empty successful fetches are not recorded.</p></section>
+<section class="status-summary card">{{ coverage_label(coverage) }}<p class="note">Reporting means at least one reading in the last 30 minutes. Empty fetches and fetch failures are not stored, so gaps do not tell us whether services are running.</p></section>
 <section class="card" aria-labelledby="status-heading">
-  <div class="section-heading card-heading"><h2 id="status-heading">Latest station update</h2><span>Flagged stations first</span></div>
+  <div class="section-heading card-heading"><h2 id="status-heading">Latest station update</h2><span>Alphabetical by station</span></div>
   <ul class="status-list">
-    {% for row in station_status %}<li><a class="station-code" href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a><span class="badge {{ 'major' if row.stale else 'neutral' if not service_hours else 'on-time' }}">{{ 'No recent data' if row.stale else 'Overnight · alerts paused' if not service_hours else 'Up to date' }}</span><div class="fetch-time">{% if row.last_fetch %}<time datetime="{{ row.last_fetch.isoformat() }}">{{ row.last_fetch|dublin_time }}</time>{% else %}No data yet{% endif %}</div></li>
+    {% for row in station_status %}<li><a class="station-code" href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a><span class="coverage">{{ 'Recent readings' if row.readings else 'No recent readings' }}</span><div class="fetch-time">{% if row.last_fetch %}<time datetime="{{ row.last_fetch.isoformat() }}">{{ row.last_fetch|dublin_time }}</time>{% else %}No recent readings{% endif %}</div></li>
     {% else %}<li class="empty">No stations configured.</li>{% endfor %}
   </ul>
 </section>

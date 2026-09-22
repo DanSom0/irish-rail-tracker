@@ -1,26 +1,29 @@
 {% extends 'base.html' %}
-{% from 'components.html' import freshness, daily, services, station_filter %}
+{% from 'components.html' import freshness, daily, services, station_filter, coverage_label %}
 {% block content %}
-<div class="page-heading"><p class="eyebrow">Network overview{% if station %} · {{ station|station_name }}{% endif %}</p><h1>{{ station|station_name if station else 'Dublin' }}, right now.</h1></div>
+<div class="page-heading"><h1>{{ station|station_name if station else 'Dublin' }}, right now.</h1><p>Check your station's latest services and reported delays.</p></div>
 <section class="station-start" aria-labelledby="station-start-heading">
-  <h2 id="station-start-heading">Where are you travelling from?</h2>
-  {{ station_filter(stations, station, 'dashboard.stations', 'Find your station', 'View board', false) }}
+  <h2 id="station-start-heading" class="visually-hidden">Where are you travelling from?</h2>
+  {{ station_filter(stations, station or remembered_station, 'dashboard.stations', 'Find your station', 'View board', false) }}
+  <p class="shortcuts">{% for code, label in [('CNLLY', 'Connolly'), ('PERSE', 'Pearse'), ('TARA', 'Tara Street'), ('HSTON', 'Heuston'), ('GCDK', 'Grand Canal Dock')] %}<a href="{{ url_for('dashboard.station_detail', code=code) }}">{{ label }}</a> {% endfor %}
+  {% if remembered_station %}<a class="forget-station" href="{{ url_for('dashboard.forget_station') }}">Forget my station</a>{% endif %}</p>
 </section>
 <section class="network-card" aria-labelledby="network-heading">
-  <div class="network-intro"><h2 id="network-heading">Last 30 minutes</h2><span class="coverage">{{ network.reporting }}/{{ network.total }} stations reporting</span></div>
+  <div class="network-intro"><h2 id="network-heading">Last 30 minutes</h2>{{ coverage_label(coverage) }}</div>
   {% if network.readings %}
   <div class="network-main">
     <div class="headline"><strong>{{ '%.0f'|format(network.on_time) }}<span>%</span></strong><p>of tracked trains on time</p></div>
     <dl class="network-facts"><div><dt>Average delay</dt><dd>{{ '%.1f'|format(network.average_delay) }} <span>min</span></dd></div><div><dt>Delays of 6+ min</dt><dd>{{ network.major }} <span>trains</span></dd></div></dl>
   </div>
-  <div class="network-bottom" id="network-answer"><p>Highest station average: <a href="{{ url_for('dashboard.station_detail', code=highest_delay.station) }}">{{ highest_delay.station|station_name }}</a> <strong>{{ '%.1f'|format(highest_delay.average_delay) }} min</strong></p><p>On time = 0–1 min · {{ network.trains }} trains</p></div>
-  {% else %}<div class="network-empty" id="network-answer"><h2>No recent data yet</h2><p>We can't report current delays until new station readings arrive.</p><a href="{{ url_for('dashboard.status') }}">Check data status →</a></div>{% endif %}
-  {% if network.reporting < network.total %}<p class="coverage-note">{{ network.total-network.reporting }} station{{ '' if network.total-network.reporting == 1 else 's' }} without recent data. <a href="{{ url_for('dashboard.status') }}">Check coverage →</a></p>{% endif %}
+
+  {% else %}<div class="network-empty" id="network-answer"><h2>No recent readings</h2><p>We can't report current delays until new station readings arrive.</p><a href="{{ url_for('dashboard.status') }}">Check data status →</a></div>{% endif %}
+
 </section>
 {{ freshness(last_updated, age_minutes) }}
-{{ daily(summary, today) }}
 <section class="card" aria-labelledby="delays-heading">
-  <div class="section-heading card-heading"><div><h2 id="delays-heading">Largest current delays</h2><p>One row per train · latest reported delay first</p></div><a href="{{ url_for('dashboard.stations') }}">Explore stations →</a></div>
+  <div class="section-heading card-heading"><div><h2 id="delays-heading">Largest current delays</h2></div></div>
   {{ services(current_delays, reading_details) }}
 </section>
+  {% if network.readings %}<div class="network-bottom" id="network-answer"><p>Highest station average: <a href="{{ url_for('dashboard.station_detail', code=highest_delay.station) }}">{{ highest_delay.station|station_name }}</a> <strong>{{ '%.1f'|format(highest_delay.average_delay) }} min</strong></p><p>On time = 0–1 min · {{ network.trains }} trains</p></div>{% endif %}
+{{ daily(summary, today) }}
 {% endblock %}

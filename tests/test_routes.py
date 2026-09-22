@@ -217,8 +217,7 @@ def test_status_flags_only_stale_stations_during_service_hours(
     assert statuses["HSTON"]["stale"] is flagged  # Never observed.
     assert statuses["TARA"]["stale"] is False  # Exactly 30 minutes is still fresh.
     if not flagged:
-        assert "Overnight · alerts paused" in page
-        assert "No recent data</span>" not in page
+        assert "No recent readings" in page
 
 
 def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboard_data):
@@ -248,7 +247,8 @@ def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboar
     ("/stations", "Stations", "Stations"),
     ("/stations/CNLLY", "Dublin Connolly", "Stations"),
     ("/routes", "Route performance", "Route performance"),
-    ("/status", "Data status", "Data status"),
+    ("/status", "Data status", "● Limited coverage"),
+    ("/about/data", "How the data works", None),
 ])
 def test_each_page_renders_with_title_navigation_and_refresh(
     client, dashboard_data, populated, path, title, active,
@@ -260,7 +260,8 @@ def test_each_page_renders_with_title_navigation_and_refresh(
     page = response.get_data(as_text=True)
     assert response.status_code == 200
     assert f"<title>{title} · Irish Rail Delay Tracker</title>" in page
-    assert f'aria-current="page">{active}</a>' in page
+    if active:
+        assert f'aria-current="page">{active}</a>' in page
     assert '<meta http-equiv="refresh" content="60">' in page
     assert '<main id="main"' in page
     assert '<script' not in page
@@ -303,7 +304,7 @@ def test_current_network_is_weighted_and_excludes_old_readings(client, dashboard
     assert network["on_time"] == pytest.approx(200 / 3)
     assert network["major"] == 1 and network["readings"] == 3
     assert network["reporting"] == 2
-    assert "stations without recent data" in page
+    assert "Limited coverage · 2 of 5 stations reporting" in page
     assert context["summary"].average_delay == 27  # Today is distinct from right now.
 
 
@@ -341,13 +342,13 @@ def test_route_sample_counts_and_day_filter(client, dashboard_data):
     assert "2 trains" in page
 
 
-def test_status_lists_stale_stations_first(client, dashboard_data, clock):
+def test_status_lists_stations_alphabetically(client, dashboard_data, clock):
     seed, context = dashboard_data
     seed({"station": "CNLLY"},
          {"station": "TARA", "fetched_at": clock.instant - timedelta(hours=1)})
     client.get("/status")
-    flags = [row["stale"] for row in context["station_status"]]
-    assert flags == sorted(flags, reverse=True)
+    names = [routes.station_name(row["station"]) for row in context["station_status"]]
+    assert names == sorted(names, key=str.casefold)
 
 
 def test_latest_train_reading_drives_rows_and_all_averages(client, dashboard_data, clock):
@@ -367,8 +368,8 @@ def test_latest_train_reading_drives_rows_and_all_averages(client, dashboard_dat
     ]
     assert [(reading.station, reading.delay_minutes)
             for reading in context["reading_details"][rows[1].id]] == [("TARA", 10), ("CNLLY", 40)]
-    assert 'Latest reading at <a href="/stations/PERSE">Dublin Pearse</a>' in page
-    assert 'Reading details' in page and '40 min late' in page
+    assert 'At <a href="/stations/PERSE">Dublin Pearse</a>' in page
+    assert '<summary>Details</summary>' in page and '40 min late' in page
     assert context["network"]["readings"] == 3  # Station readings remain distinct from trains.
     assert context["network"]["trains"] == 2
     assert context["network"]["average_delay"] == 3
@@ -430,8 +431,8 @@ def test_next_services_use_dublin_schedules_and_reported_delay(
     page = client.get("/stations/CNLLY").get_data(as_text=True)
     assert [row.train_code for row in context["pagination"]["items"]] == expected
     assert 'href="/stations/CNLLY"' not in page  # No repeated self-link in service rows.
-    assert '<th scope="col">Time</th>' in page
-    assert 'Includes terminating arrivals' in page
+    assert '<th scope="col">Scheduled</th>' in page
+    assert 'inferred from matching origin and destination names' in page
     client.get("/stations/CNLLY?view=delays")
     assert context["pagination"]["total"] == len(rows)
 
@@ -441,11 +442,111 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     seed({})
     page = client.get("/").get_data(as_text=True)
     assert page.index('Where are you travelling from?') < page.index('Last 30 minutes')
-    for code, name in routes.STATION_NAMES.items():
-        assert f'<option value="{code}">{name}</option>' in page
+    for code in ("CNLLY", "PERSE", "HSTON", "TARA", "MHIDE"):
+        assert f'<option value="{code}">{routes.STATION_NAMES[code]}</option>' in page
+    assert "Check your station&#39;s" in page or "Check your station's" in page
     assert 'Independent project, not affiliated with Iarnród Éireann' in page
-    assert 'Daniel English' in page and 'public realtime API' in page
-    assert 'selected stations in the Dublin area' in page
-    assert 'not a confirmed arrival delay' in page
-    assert page.index('GitHub ↗') > page.index('<footer')
-    assert 'Route performance</a>' in page and 'Data status</a>' in page
+    assert 'Daniel English' in page
+    assert page.index('Report a problem') > page.index('<footer')
+    assert 'href="/about/data"' in page
+    assert 'Route performance</a>' in page and '● Limited coverage</a>' in page
+
+
+def test_static_names_cover_configured_stations(app, client, dashboard_data, monkeypatch):
+    from pathlib import Path
+
+    from app.stations import STATION_NAMES
+
+    example = next(line.split("=", 1)[1] for line in Path(".env.example").read_text().splitlines()
+                   if line.startswith("STATION_CODES="))
+    codes = set(example.split(",")) | set(app.config["STATION_CODES"])
+    assert all(STATION_NAMES.get(code) for code in codes)
+    monkeypatch.setitem(app.config, "STATION_CODES", tuple(codes))
+    for path in ("/", "/stations", "/routes", "/status"):
+        page = client.get(path).get_data(as_text=True)
+        assert "Unlisted station" not in page
+        for code in codes:
+            assert STATION_NAMES[code] in page
+    assert client.get("/stations/GCDK").status_code == 200
+
+
+@pytest.mark.parametrize("all_reporting", [False, True])
+def test_coverage_counts_stations_with_readings_in_window(
+    app, client, dashboard_data, clock, monkeypatch, all_reporting,
+):
+    seed, context = dashboard_data
+    monkeypatch.setitem(app.config, "STATION_CODES", ("CNLLY", "TARA", "GCDK"))
+    seed(
+        {"station": "CNLLY"},
+        {"station": "CNLLY"},  # Multiple trains still count as one reporting station.
+        {"station": "TARA", "fetched_at": clock.instant - timedelta(minutes=30)},
+        {"station": "GCDK", "fetched_at": clock.instant - timedelta(
+            minutes=29 if all_reporting else 30, seconds=1)},
+        {"station": "PERSE"},  # Historical/unconfigured stations do not inflate coverage.
+        {"station": "GCDK", "fetched_at": clock.instant + timedelta(minutes=1)},
+    )
+    page = client.get("/").get_data(as_text=True)
+    assert context["coverage"] == {"reporting": 3 if all_reporting else 2, "total": 3}
+    if all_reporting:
+        assert "All 3 stations reporting" in page
+        assert 'class="coverage limited"' not in page
+        assert "● Data up to date" in page
+    else:
+        assert 'class="coverage limited">Limited coverage · 2 of 3 stations reporting' in page
+        assert "No recent readings" in client.get("/status").get_data(as_text=True)
+    client.get("/stations/CNLLY")
+    assert context["coverage"]["total"] == 3
+
+
+@pytest.mark.parametrize("origin,destination,label", [
+    ("Bray", "Dublin Connolly", "Terminates here"),
+    ("Dublin Connolly", "Bray", "Starts here"),
+    ("Malahide", "Bray", "Calling service"),
+    ("Bray", "CNLLY", "Terminates here"),
+    ("CNLLY", "Bray", "Starts here"),
+    ("Bray", " dUbLiN cOnNoLlY ", "Terminates here"),
+])
+def test_service_direction_uses_station_name_map(
+    client, dashboard_data, origin, destination, label,
+):
+    seed, _ = dashboard_data
+    seed({"origin": origin, "destination": destination})
+    page = client.get("/stations/CNLLY?view=delays").get_data(as_text=True)
+    assert f"<small>{label}</small>" in page
+
+
+def test_station_cookie_set_preselect_and_forget(client, dashboard_data):
+    response = client.get("/stations?station=TARA")
+    cookie = response.headers["Set-Cookie"]
+    assert "station=TARA" in cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie
+    assert "Max-Age=7776000" in cookie
+    page = client.get("/").get_data(as_text=True)
+    assert '<option value="TARA" selected>' in page
+    assert "Forget my station" in page
+    assert "Dublin, right now." in page  # Preference preselects; network stays network-wide.
+    response = client.get("/forget-station")
+    assert "Max-Age=0" in response.headers["Set-Cookie"]
+    assert '<option value="TARA" selected>' not in client.get("/").get_data(as_text=True)
+    assert client.get("/stations?station=INVALID").headers.get("Set-Cookie") is None
+    client.set_cookie("station", "INVALID")
+    assert "Forget my station" not in client.get("/").get_data(as_text=True)
+
+
+def test_methodology_and_problem_link(client, dashboard_data):
+    page = client.get("/about/data").get_data(as_text=True)
+    for text in ("every 5 minutes", "Late field", "not a confirmed arrival delay",
+                 "last 30 minutes", "fetch failures", "not affiliated with Iarnród Éireann",
+                 "public realtime API", "name-based inferences"):
+        assert text in page
+    for path in ("/", "/stations", "/stations/CNLLY", "/routes", "/status",
+                 "/about/data", "/missing"):
+        assert 'href="https://github.com/DanSom0/irish-rail-tracker/issues/new"' in (
+            client.get(path).get_data(as_text=True)
+        )
+
+
+def test_shortcut_station_can_be_reselected_without_configured_readings(client, dashboard_data):
+    client.get("/stations/GCDK")
+    page = client.get("/").get_data(as_text=True)
+    assert '<option value="GCDK" selected>Grand Canal Dock</option>' in page
+    assert client.get("/stations?station=GCDK").location == "/stations/GCDK"
