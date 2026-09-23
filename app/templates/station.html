@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% from 'components.html' import freshness, daily, services, station_filter, pagination_links with context %}
 {% block content %}
-<div class="page-heading"><a class="back-link" href="{{ url_for('dashboard.stations') }}">← All stations</a><h1>{{ station|station_name }}</h1></div>
+<div class="page-heading"><a class="back-link" href="{{ url_for('dashboard.stations') }}">← All stations</a><h1>{{ station|station_name }}</h1>{% if station not in monitored_stations %}<p>Not currently monitored</p>{% endif %}</div>
 {{ freshness(last_updated, age_minutes) }}
 {{ station_filter(stations, station, 'dashboard.stations', 'Change station', 'Go', false) }}
 <section class="card station-board" aria-labelledby="services-heading">

@@ -1,6 +1,7 @@
 """Tests for application HTTP routes and dashboard calculations."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from flask import template_rendered
@@ -220,8 +221,9 @@ def test_status_flags_only_stale_stations_during_service_hours(
         assert "No recent readings" in page
 
 
-def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboard_data):
+def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboard_data, monkeypatch):
     seed, context = dashboard_data
+    monkeypatch.setitem(app.config, "STATION_CODES", tuple(f"S{i:02}" for i in range(120)))
     seed(*({"station": f"S{i:02}", "delay_minutes": i % 10} for i in range(120)))
     queries = []
 
@@ -304,7 +306,7 @@ def test_current_network_is_weighted_and_excludes_old_readings(client, dashboard
     assert network["on_time"] == pytest.approx(200 / 3)
     assert network["major"] == 1 and network["readings"] == 3
     assert network["reporting"] == 2
-    assert "Limited coverage · 2 of 5 stations reporting" in page
+    assert "2 of 20 monitored stations up to date" in page
     assert context["summary"].average_delay == 27  # Today is distinct from right now.
 
 
@@ -368,7 +370,7 @@ def test_latest_train_reading_drives_rows_and_all_averages(client, dashboard_dat
     ]
     assert [(reading.station, reading.delay_minutes)
             for reading in context["reading_details"][rows[1].id]] == [("TARA", 10), ("CNLLY", 40)]
-    assert 'At <a href="/stations/PERSE">Dublin Pearse</a>' in page
+    assert 'Reported at <a href="/stations/PERSE">Dublin Pearse</a>' in page
     assert '<summary>Details</summary>' in page and '40 min late' in page
     assert context["network"]["readings"] == 3  # Station readings remain distinct from trains.
     assert context["network"]["trains"] == 2
@@ -444,8 +446,9 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     assert page.index('Find your station') < page.index('Last 30 minutes')
     for code in ("CNLLY", "PERSE", "HSTON", "TARA", "MHIDE"):
         assert f'<option value="{code}">{routes.STATION_NAMES[code]}</option>' in page
-    for code in ("CNLLY", "PERSE", "TARA", "HSTON", "GCDK"):
-        assert f'<a href="/stations/{code}">{routes.STATION_NAMES[code]}</a>' in page
+    assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
+    for code in ("PERSE", "TARA", "HSTON", "GCDK"):
+        assert f'<a href="/stations/{code}">{routes.STATION_NAMES[code]}</a>' not in page
     assert "Check your station&#39;s" in page or "Check your station's" in page
     assert 'Independent project, not affiliated with Iarnród Éireann' in page
     assert 'Daniel English' in page
@@ -459,13 +462,13 @@ def test_static_names_cover_configured_stations(app, client, dashboard_data, mon
 
     from app.stations import STATION_NAMES
 
-    examples = []
-    for name in (".env.example", ".env.production.example"):
-        example = next(line.split("=", 1)[1] for line in Path(name).read_text().splitlines()
-                       if line.startswith("STATION_CODES="))
-        assert len(example.split(",")) == len(set(example.split(",")))
-        examples.extend(example.split(","))
-    codes = set(examples) | set(app.config["STATION_CODES"])
+    example = next(line.split("=", 1)[1] for line in Path(".env.example").read_text().splitlines()
+                   if line.startswith("STATION_CODES="))
+    assert len(example.split(",")) == len(set(example.split(",")))
+    assert not any(line.startswith("STATION_CODES=") for line in (
+        Path(".env.production.example").read_text().splitlines()
+    ))
+    codes = set(example.split(",")) | set(app.config["STATION_CODES"])
     assert all(STATION_NAMES.get(code) for code in codes)
     monkeypatch.setitem(app.config, "STATION_CODES", tuple(codes))
     for path in ("/", "/stations", "/routes"):
@@ -473,7 +476,7 @@ def test_static_names_cover_configured_stations(app, client, dashboard_data, mon
         assert "Unlisted station" not in page
         for code in codes:
             assert STATION_NAMES[code] in page
-    assert "No stations have a reading in the last 30 minutes" in (
+    assert "No monitored stations have a reading in the last 30 minutes" in (
         client.get("/status").get_data(as_text=True)
     )
     assert client.get("/stations/GCDK").status_code == 200
@@ -497,11 +500,11 @@ def test_coverage_counts_stations_with_readings_in_window(
     page = client.get("/").get_data(as_text=True)
     assert context["coverage"] == {"reporting": 3 if all_reporting else 2, "total": 3}
     if all_reporting:
-        assert "All 3 stations reporting" in page
+        assert "3 of 3 monitored stations up to date" in page
         assert 'class="coverage limited"' not in page
         assert "● Data up to date" in page
     else:
-        assert 'class="coverage limited">Limited coverage · 2 of 3 stations reporting' in page
+        assert 'class="coverage limited">2 of 3 monitored stations up to date' in page
         assert "No recent readings" in client.get("/status").get_data(as_text=True)
     client.get("/stations/CNLLY")
     assert context["coverage"]["total"] == 3
@@ -532,7 +535,7 @@ def test_station_cookie_set_preselect_and_forget(client, dashboard_data):
     page = client.get("/").get_data(as_text=True)
     assert '<option value="TARA" selected>' in page
     assert "Forget my station" in page
-    assert "Dublin rail departures" in page  # Preference preselects; network stays network-wide.
+    assert "Dublin rail services" in page  # Preference preselects; network stays network-wide.
     response = client.get("/forget-station")
     assert "Max-Age=0" in response.headers["Set-Cookie"]
     assert '<option value="TARA" selected>' not in client.get("/").get_data(as_text=True)
@@ -697,3 +700,76 @@ def test_freshness_has_relative_text_and_precise_accessible_time(client, dashboa
 ])
 def test_freshness_uses_readable_relative_units(minutes, expected):
     assert routes.age_text(minutes) == expected
+
+
+@pytest.mark.parametrize("scheduled,delay,expected", [
+    ("12:34", 0, ("12:34", 0)),
+    ("12:34", 7, ("12:41", 0)),
+    ("12:34", -2, ("12:32", 0)),
+    ("23:58", 7, ("00:05", 1)),
+    ("00:03", -5, ("23:58", -1)),
+    ("broken", 7, (None, 0)),
+])
+def test_expected_time_uses_dublin_clock_and_marks_midnight(scheduled, delay, expected):
+    row = SimpleNamespace(train_date="2026-09-22", scheduled_time=scheduled,
+                          delay_minutes=delay)
+    assert routes.expected_time(row) == expected
+
+
+def test_expected_time_crosses_dublin_spring_clock_change():
+    row = SimpleNamespace(train_date="2026-03-29", scheduled_time="00:59",
+                          delay_minutes=2)
+    assert routes.expected_time(row) == ("02:01", 0)
+
+
+def test_service_boards_show_scheduled_expected_destination_and_status(client, dashboard_data):
+    seed, _ = dashboard_data
+    seed(
+        {"train_code": "LATE", "scheduled_time": "23:58", "delay_minutes": 7},
+        {"train_code": "EARLY", "scheduled_time": "00:03", "delay_minutes": -5},
+        {"train_code": "ONTIME", "scheduled_time": "09:10", "delay_minutes": 0},
+    )
+    station = client.get("/stations/CNLLY?view=delays").get_data(as_text=True)
+    assert station.index("Scheduled</th>") < station.index("Expected</th>")
+    assert station.index("Expected</th>") < station.index("Destination</th>")
+    assert station.index("Destination</th>") < station.index("Status</th>")
+    assert "<time>00:05</time><small>+1 day</small>" in station
+    assert "<time>23:58</time><small>−1 day</small>" in station
+    assert 'class="expected-time unchanged"><time>09:10</time>' in station
+    assert "7 min late" in station and "5 min early" in station and "On time" in station
+    network = client.get("/").get_data(as_text=True)
+    assert "Reported at <a" in network and "<time>00:05</time>" in network
+    assert "5 min early" not in network  # The network list shows significant delays only.
+
+
+def test_route_range_is_observed_scheduled_times_not_timetable(client, dashboard_data):
+    seed, _ = dashboard_data
+    seed(
+        {"train_code": "MORNING", "scheduled_time": "06:12"},
+        {"train_code": "EVENING", "scheduled_time": "18:45"},
+        {"train_code": "UNKNOWN", "scheduled_time": "broken"},
+    )
+    page = client.get("/routes").get_data(as_text=True)
+    assert "Seen today: 06:12 – 18:45" in page
+    assert "not a full timetable" in page
+
+
+def test_monitored_scope_excludes_historical_stations_from_network(
+    app, client, dashboard_data, monkeypatch,
+):
+    seed, context = dashboard_data
+    monkeypatch.setitem(app.config, "STATION_CODES", ("CNLLY", "TARA"))
+    seed({"station": "CNLLY", "delay_minutes": 7},
+         {"station": "GCDK", "delay_minutes": 20})
+    page = client.get("/").get_data(as_text=True)
+    assert context["coverage"] == {"reporting": 1, "total": 2}
+    assert context["network"]["trains"] == 1
+    assert [row.station for row in context["current_delays"]] == ["CNLLY"]
+    assert "1 of 2 monitored stations up to date" in page
+    assert "Across 2 monitored stations" in page
+    assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
+    assert '<a href="/stations/GCDK">Grand Canal Dock</a>' not in page
+    assert '<a href="/stations/TARA">Tara Street</a>' not in page
+    assert '<option value="GCDK">Grand Canal Dock · Not currently monitored</option>' in page
+    for path in ("/stations", "/status", "/stations/GCDK"):
+        assert "Not currently monitored" in client.get(path).get_data(as_text=True)

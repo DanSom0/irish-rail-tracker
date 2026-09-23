@@ -15,7 +15,7 @@ services:
   web:
     build: .
     environment:
-      STATION_CODES: ${STATION_CODES:-CNLLY,PERSE,HSTON,TARA,MHIDE}
+      STATION_CODES:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-irishrail}:${POSTGRES_PASSWORD:-irishrail}@db:5432/${POSTGRES_DB:-irishrail}
     ports:
       - "${WEB_PORT:-8000}:8000"
@@ -27,7 +27,7 @@ services:
     command: ["python", "-m", "app.worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-irishrail}:${POSTGRES_PASSWORD:-irishrail}@db:5432/${POSTGRES_DB:-irishrail}
-      STATION_CODES: ${STATION_CODES:-CNLLY,PERSE,HSTON,TARA,MHIDE}
+      STATION_CODES:
       FETCH_INTERVAL_MINUTES: ${FETCH_INTERVAL_MINUTES:-5}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
     depends_on:
