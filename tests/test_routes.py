@@ -92,6 +92,9 @@ def test_dashboard_empty_state(client, dashboard_data):
     response = client.get("/")
     assert response.status_code == 200
     assert "Current punctuality is not available" in response.get_data(as_text=True)
+    assert "Current delays are unavailable until a monitored station returns fresh readings" in (
+        response.get_data(as_text=True)
+    )
     assert context["summary"].trains == 0
     assert context["summary"].on_time is None
     assert context["summary"].average_delay is None
@@ -354,7 +357,7 @@ def test_current_network_is_weighted_and_excludes_old_readings(client, dashboard
     assert network["on_time"] == pytest.approx(200 / 3)
     assert network["major"] == 1 and network["readings"] == 3
     assert network["reporting"] == 2
-    assert "2 of 20 monitored stations up to date" in page
+    assert "2/20 stations reporting" in page
     assert context["summary"].average_delay == 27  # Today is distinct from right now.
 
 
@@ -491,7 +494,11 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     seed, _ = dashboard_data
     seed({})
     page = client.get("/").get_data(as_text=True)
-    assert page.index('Find your station') < page.index('Current services')
+    assert page.index('class="station-start"') < page.index('<h1 id="home-heading">')
+    assert page.index('Find your station') < page.index('Network right now')
+    assert 'class="intro-rail"' in page and 'aria-hidden="true" focusable="false"' in page
+    assert page.index('class="homepage-lower"') < page.index('class="current-delays"')
+    assert page.index('class="current-delays"') < page.index('class="daily"')
     for code in ("CNLLY", "PERSE", "HSTON", "TARA", "MHIDE"):
         assert f'<option value="{code}">{routes.STATION_NAMES[code]}</option>' in page
     assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
@@ -548,11 +555,11 @@ def test_coverage_counts_stations_with_readings_in_window(
     page = client.get("/").get_data(as_text=True)
     assert context["coverage"] == {"reporting": 3 if all_reporting else 2, "total": 3}
     if all_reporting:
-        assert "3 of 3 monitored stations up to date" in page
+        assert "3/3 stations reporting" in page
         assert 'class="coverage limited"' not in page
         assert "● Data up to date" in page
     else:
-        assert 'class="coverage limited">2 of 3 monitored stations up to date' in page
+        assert "2/3 stations reporting" in page
         assert "No recent readings" in client.get("/status").get_data(as_text=True)
     client.get("/stations/CNLLY")
     assert context["coverage"]["total"] == 3
@@ -737,7 +744,8 @@ def test_freshness_has_relative_text_and_precise_accessible_time(client, dashboa
     instant = clock.instant - timedelta(minutes=7)
     seed({"fetched_at": instant})
     page = client.get("/").get_data(as_text=True)
-    assert "Updated 7 minutes ago · Dublin time</time>" in page
+    assert "1/20 stations reporting · <time" in page
+    assert "Updated 7 minutes ago</time>" in page
     assert f'datetime="{instant.isoformat()}"' in page
     assert 'title="22 Sep 2026, 12:53:00 IST (UTC+0100)"' in page
 
@@ -751,8 +759,8 @@ def test_freshness_uses_readable_relative_units(minutes, expected):
 
 
 @pytest.mark.parametrize("age,expected", [
-    (timedelta(seconds=30), "Updated just now · Dublin time"),
-    (timedelta(minutes=1), "Updated 1 minute ago · Dublin time"),
+    (timedelta(seconds=30), "Updated just now</time>"),
+    (timedelta(minutes=1), "Updated 1 minute ago</time>"),
 ])
 def test_freshness_handles_under_a_minute_and_singular(client, dashboard_data, clock, age, expected):
     seed, _ = dashboard_data
@@ -823,7 +831,7 @@ def test_monitored_scope_excludes_historical_stations_from_network(
     assert context["coverage"] == {"reporting": 1, "total": 2}
     assert context["network"]["trains"] == 1
     assert [row.station for row in context["current_delays"]] == ["CNLLY"]
-    assert "1 of 2 monitored stations up to date" in page
+    assert "1/2 stations reporting" in page
     assert "Across 2 monitored stations" in page
     assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
     assert '<a href="/stations/GCDK">Grand Canal Dock</a>' not in page

@@ -23,10 +23,10 @@
     </nav>
   </header>
   <main id="main" class="shell">{% block content %}{% endblock %}</main>
-  <footer class="shell site-footer">
+  <footer class="site-footer"><div class="shell">
     <p>Independent project, not affiliated with Iarnród Éireann. Built and maintained by <a href="https://github.com/DanSom0">Daniel English</a>.</p>
     <p><a href="{{ url_for('dashboard.about_data') }}">How the data works</a> · <a href="https://github.com/DanSom0/irish-rail-tracker">GitHub</a> · <a href="https://github.com/DanSom0/irish-rail-tracker/issues/new">Report a problem</a></p>
     <p>Europe/Dublin times · Refreshes every 60 seconds.</p>
-  </footer>
+  </div></footer>
 </body>
 </html>
