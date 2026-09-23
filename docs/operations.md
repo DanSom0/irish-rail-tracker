@@ -26,6 +26,8 @@ Review the plan before applying it. **Apply is always manual.** Use the `instanc
 
 Before the first deployment, create `/opt/irish-rail-tracker` on the server, owned by the deploy user (`ubuntu`). Copy `.env.production.example` there as `.env` and replace the placeholders. Set file permissions to `600`, so only its owner can read or write it. The server's startup script installs Docker and Compose.
 
+The monitored station list lives in `app/config.py`. Leave `STATION_CODES` unset in the server's `.env` so web and worker use the list shipped with the image. Remove an older `STATION_CODES` line from the server's `.env` when updating it; set the variable only for an intentional override.
+
 Set these secrets in GitHub's **production** environment: `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`, and `EC2_KNOWN_HOSTS`. Verify the server's SSH host key before adding it to `EC2_KNOWN_HOSTS`. Allow the repository's workflow token to access its image package in GitHub Container Registry (GHCR). The workflow uses `GITHUB_TOKEN` to sign in; app settings stay in the server's `.env`.
 
 ## Deployment details
@@ -111,7 +113,7 @@ Copy the settings from [`.env.production.example`](../.env.production.example) i
 | `POSTGRES_DB` | Required | Database name; letters, digits, and underscores. |
 | `POSTGRES_USER` | Required | Database user; letters, digits, and underscores. |
 | `POSTGRES_PASSWORD` | Required | Random hex password; generate with `openssl rand -hex 32`. |
-| `STATION_CODES` | `CNLLY,PERSE,HSTON,TARA,MHIDE` | Stations to check, separated by commas. |
+| `STATION_CODES` | Unset | Optional comma-separated override; defaults to the 20 stations in `app/config.py`, including when set to an empty value. |
 | `FETCH_INTERVAL_MINUTES` | `5` | Minutes between station checks. |
 | `REQUEST_TIMEOUT_SECONDS` | `15` | API request timeout in seconds. |
 | `IRISH_RAIL_API_URL` | Unset | Optional API address; defaults to `http://api.irishrail.ie/realtime/realtime.asmx/getStationDataByCodeXML`. |

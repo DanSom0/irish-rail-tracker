@@ -8,7 +8,7 @@
   <div class="section-heading card-heading"><h2 id="routes-heading">{{ (pagination.total|string + (' route' if pagination.total == 1 else ' routes')) if pagination.total else 'Route performance' }}{% if station %} · {{ station|station_name }}{% endif %}</h2><span>{{ today }} · Dublin</span></div>
   {% if pagination.total %}<div class="table-scroll" role="region" aria-labelledby="routes-heading" tabindex="0">
     <table class="route-table"><thead><tr><th scope="col">Route / sample size</th><th scope="col" class="numeric">Avg. delay</th></tr></thead><tbody>
-      {% for row in pagination['items'] %}<tr><th scope="row">{{ row.origin|place_name }} <span class="route-arrow" aria-label="to">→</span> {{ row.destination|place_name }}<small>{{ row.trains }} train{{ '' if row.trains == 1 else 's' }}</small></th><td class="numeric">{{ row.average_delay|delay_text }}</td></tr>
+      {% for row in pagination['items'] %}<tr><th scope="row">{{ row.origin|place_name }} <span class="route-arrow" aria-label="to">→</span> {{ row.destination|place_name }}<small>{{ row.trains }} train{{ '' if row.trains == 1 else 's' }}</small>{% if row.first_scheduled %}<small>Seen {{ day }}: {{ row.first_scheduled }} – {{ row.last_scheduled }}</small>{% endif %}</th><td class="numeric">{{ row.average_delay|delay_text }}</td></tr>
       {% endfor %}
     </tbody></table>
   </div>
@@ -16,5 +16,5 @@
   {% else %}{{ empty_state("Route performance is unavailable because no readings are stored for this day and station selection.") }}{% endif %}
   {% if day == 'yesterday' %}<p class="note"><a href="{{ url_for('dashboard.route_averages', station=station) }}">View today</a></p>{% endif %}
 </section>
-<p class="note below-card">A train can be observed at several stations. Each train counts once here, using its latest reading within the selected stations. These are reported delays, not confirmed arrival delays.</p>
+<p class="note below-card">The seen time range comes from scheduled times in stored readings, not a full timetable. A train can be observed at several stations. Each train counts once here, using its latest reading within the selected stations. These are reported delays, not confirmed arrival delays.</p>
 {% endblock %}

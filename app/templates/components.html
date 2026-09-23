@@ -28,20 +28,22 @@
 <form class="station-filter" method="get" action="{{ url_for(endpoint) }}">
   {% if day is defined and day == "yesterday" %}<input type="hidden" name="day" value="yesterday">{% endif %}
   <label for="station">{{ label }}</label>
-  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in (stations + ([station] if station and station not in stations else []))|sort_stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}</option>{% endfor %}</select>
+  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in (stations + ([station] if station and station not in stations else []))|sort_stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}{% if code not in monitored_stations %} · Not currently monitored{% endif %}</option>{% endfor %}</select>
   <button type="submit">{{ button }}</button>
 </form>
 {% endmacro %}
 
 {% macro services(rows, reading_details, station='') %}
 {% if rows %}<table class="departure-board">
-  <caption class="visually-hidden">Scheduled services, destinations and latest reported delays</caption>
-  <thead><tr><th scope="col" class="numeric">Scheduled</th><th scope="col">Destination</th><th scope="col" class="numeric">Delay</th></tr></thead>
+  <caption class="visually-hidden">Scheduled and expected Dublin times, destinations and latest reported delays</caption>
+  <thead><tr><th scope="col" class="numeric">Scheduled</th><th scope="col" class="numeric">Expected</th><th scope="col">Destination</th><th scope="col" class="numeric">Status</th></tr></thead>
   <tbody>
   {% for row in rows %}
+  {% set expected_clock, day_offset = row|expected_time %}
   <tr>
     <td class="service-time">{{ row.scheduled_time }}</td>
-    <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if station %}<small>{{ row|service_kind }}</small>{% endif %}{% if not station %}<small>At <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
+    <td class="expected-time{{ ' unchanged' if row.delay_minutes == 0 else '' }}">{% if expected_clock %}<time>{{ expected_clock }}</time>{% if day_offset %}<small>{{ '+' if day_offset > 0 else '−' }}{{ day_offset|abs }} day{{ '' if day_offset|abs == 1 else 's' }}</small>{% endif %}{% else %}—{% endif %}</td>
+    <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if station %}<small>{{ row|service_kind }}</small>{% endif %}{% if not station %}<small>Reported at <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
       <details class="reading-details"><summary>Details</summary>
         <p>Train {{ row.train_code }}</p>
         <p>From {{ row.origin|place_name }} · {{ row.train_date }}</p>
@@ -69,5 +71,5 @@
 {% endmacro %}
 
 {% macro coverage_label(coverage) %}
-<span class="coverage{{ ' limited' if coverage.reporting < coverage.total else '' }}">{% if coverage.reporting < coverage.total %}Limited coverage · {{ coverage.reporting }} of {{ coverage.total }} stations reporting{% else %}All {{ coverage.total }} stations reporting{% endif %}</span>
+<span class="coverage{{ ' limited' if coverage.reporting < coverage.total else '' }}">{{ coverage.reporting }} of {{ coverage.total }} monitored stations up to date</span>
 {% endmacro %}

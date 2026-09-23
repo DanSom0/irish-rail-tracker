@@ -1,6 +1,6 @@
 """Server-rendered rail dashboard and health routes."""
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from flask import (
@@ -66,6 +66,18 @@ def age_text(minutes):
             count = minutes // duration
             return f"{count} {unit}{'' if count == 1 else 's'}"
     return f"{minutes} minute{'' if minutes == 1 else 's'}"
+
+
+@dashboard.app_template_filter("expected_time")
+def expected_time(row):
+    try:
+        scheduled = datetime.combine(
+            date.fromisoformat(row.train_date), time.fromisoformat(row.scheduled_time), DUBLIN,
+        )
+    except ValueError:
+        return None, 0
+    expected = (scheduled.astimezone(UTC) + timedelta(minutes=row.delay_minutes)).astimezone(DUBLIN)
+    return expected.strftime("%H:%M"), (expected.date() - scheduled.date()).days
 
 
 @dashboard.app_template_filter("service_kind")
@@ -156,7 +168,9 @@ def _context(station="", *, strict=False):
         func.avg(observations.delay_minutes).filter(today).label("today_average"),
     ).group_by(observations.station).order_by(observations.station)).all()
     observed = {row.station: row for row in rows}
-    stations = sort_stations(set(current_app.config["STATION_CODES"]) | observed.keys())
+    monitored_stations = station_codes(current_app.config["STATION_CODES"])
+    configured = set(monitored_stations)
+    stations = sort_stations(configured | observed.keys())
     if station not in stations and station not in STATION_NAMES:
         if strict:
             abort(404)
@@ -167,18 +181,19 @@ def _context(station="", *, strict=False):
         row = observed.get(code)
         last_fetch = row.last_fetch if row else None
         station_status.append({
-            "station": code, "last_fetch": last_fetch,
-            "stale": service_hours and (last_fetch is None or last_fetch < cutoff),
+            "station": code, "monitored": code in configured, "last_fetch": last_fetch,
+            "stale": code in configured and service_hours and (last_fetch is None or last_fetch < cutoff),
             "readings": row.readings if row else 0,
             "average_delay": row.average_delay if row else None,
             "today_average": row.today_average if row else None,
         })
-    selected = [row for row in rows if not station or row.station == station]
+    selected = [row for row in rows if row.station == station] if station else [
+        row for row in rows if row.station in configured
+    ]
     readings = sum(row.readings for row in selected)
     active = [row for row in selected if row.readings]
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max((row.last_fetch for row in selected), default=None)
-    configured = set(station_codes(current_app.config["STATION_CODES"]))
     coverage = {
         "reporting": sum(bool(observed[code].readings) for code in configured if code in observed),
         "total": len(configured),
@@ -194,6 +209,10 @@ def _context(station="", *, strict=False):
 
         "remembered_station": remembered if remembered in stations or remembered in STATION_NAMES else "",
         "stations": stations, "station": station, "station_status": station_status,
+        "monitored_stations": monitored_stations,
+        "reporting_shortcuts": [code for code in ("CNLLY", "PERSE", "TARA", "HSTON", "GCDK")
+                                if code in configured and code in observed and observed[code].readings],
+        "any_stored_readings": bool(rows),
         "has_station_metrics": any(row["readings"] or row["today_average"] is not None
                                    for row in station_status),
         "highest_delay": highest_delay, "last_updated": last_updated,
@@ -201,7 +220,8 @@ def _context(station="", *, strict=False):
         if last_updated else None,
         "network": {
             "readings": readings,
-            "reporting": len(active), "total": 1 if station else len(stations),
+            "reporting": len(active) if not station or station in configured else 0,
+            "total": int(station in configured) if station else len(configured),
         },
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
         "today_date": local_now.date().isoformat(), "cutoff": cutoff, "now": now,
@@ -224,6 +244,8 @@ def _latest_readings(context, *, recent=False):
         query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
     if context["station"]:
         query = query.where(observations.station == context["station"])
+    else:
+        query = query.where(observations.station.in_(context["monitored_stations"]))
     return query.distinct(observations.train_code, observations.train_date).order_by(
         observations.train_code, observations.train_date,
         observations.fetched_at.desc(), observations.id.desc(),
@@ -338,10 +360,13 @@ def route_averages():
         context["report_date"] = context["yesterday"]
         context["today"] = datetime.fromisoformat(context["yesterday"]).strftime("%d %b %Y")
     latest = _latest_readings(context).c
+    valid_time = latest.scheduled_time.op("~")(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
     query = db.select(
         latest.origin, latest.destination,
         func.avg(latest.delay_minutes).label("average_delay"),
         func.count().label("trains"),
+        func.min(latest.scheduled_time).filter(valid_time).label("first_scheduled"),
+        func.max(latest.scheduled_time).filter(valid_time).label("last_scheduled"),
     ).group_by(latest.origin, latest.destination).order_by(
         func.avg(latest.delay_minutes).desc(), latest.origin, latest.destination,
     )

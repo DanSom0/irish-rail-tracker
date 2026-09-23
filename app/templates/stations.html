@@ -8,7 +8,7 @@
   <div class="section-heading card-heading"><h2 id="stations-heading">{{ stations|length }} stations</h2><span>Current = last 30 minutes</span></div>
   {% if has_station_metrics %}<div class="table-scroll" role="region" aria-labelledby="stations-heading" tabindex="0">
     <table class="station-table"><thead><tr><th scope="col">Station</th><th scope="col" class="numeric">Current avg.</th><th scope="col" class="numeric">Today avg.</th></tr></thead><tbody>
-      {% for row in station_status %}<tr><th scope="row"><a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }} <span aria-hidden="true">→</span></a><small>{{ (row.readings|string + (' recent reading' if row.readings == 1 else ' recent readings')) if row.readings else 'No recent readings' }}</small></th><td class="numeric">{{ row.average_delay|delay_text if row.average_delay is not none else '—' }}</td><td class="numeric">{{ row.today_average|delay_text if row.today_average is not none else '—' }}</td></tr>
+      {% for row in station_status %}<tr><th scope="row"><a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }} <span aria-hidden="true">→</span></a><small>{{ 'Not currently monitored' if not row.monitored else (row.readings|string + (' recent reading' if row.readings == 1 else ' recent readings')) if row.readings else 'No recent readings' }}</small></th><td class="numeric">{{ row.average_delay|delay_text if row.average_delay is not none else '—' }}</td><td class="numeric">{{ row.today_average|delay_text if row.today_average is not none else '—' }}</td></tr>
       {% endfor %}
     </tbody></table>
   </div>
