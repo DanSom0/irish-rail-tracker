@@ -5,8 +5,6 @@ No network lookup is needed to display stations without readings.
 """
 
 STATION_NAMES = {
-    "ADAMF": "Adamstown",
-    "ADAMS": "Adamstown",
     "ADMTN": "Adamstown",
     "ARHAN": "Ardrahan",
     "ARKLW": "Arklow",
@@ -47,8 +45,6 @@ STATION_NAMES = {
     "CLDKN": "Clondalkin",
     "CLMEL": "Clonmel",
     "CLMRS": "Claremorris",
-    "CLONF": "Clondalkin",
-    "CLONS": "Clondalkin",
     "CLSLA": "Clonsilla",
     "CMINE": "Coolmine",
     "CNLLY": "Dublin Connolly",
@@ -90,21 +86,17 @@ STATION_NAMES = {
     "GSTNS": "Greystones",
     "GSTON": "Gormanston",
     "HAFLD": "Hansfield",
-    "HAZEF": "Hazelhatch",
-    "HAZES": "Hazelhatch",
     "HOWTH": "Howth",
     "HSTON": "Dublin Heuston",
     "HTOWN": "Harmonstown",
     "HWTHJ": "Howth Junction",
-    "HZLCH": "Hazelhatch",
+    "HZLCH": "Hazelhatch and Celbridge",
     "KBRCK": "Kilbarrack",
     "KCOCK": "Kilcock",
     "KCOOL": "Kilcoole",
     "KDARE": "Kildare",
     "KILNY": "Killiney",
-    "KISHF": "Kishoge",
     "KISHO": "Kishoge",
-    "KISHS": "Kishoge",
     "KKNNY": "Kilkenny",
     "KLRNY": "Killarney",
     "KLSTR": "Killester",
@@ -140,7 +132,6 @@ STATION_NAMES = {
     "PMNCK": "Portmarnock",
     "PTLSE": "Portlaoise",
     "PTRTN": "Portarlington",
-    "PWESF": "Park West and Cherry Orchard",
     "PWESS": "PARK WEST",
     "RAHNY": "Raheny",
     "RBROK": "Rushbrooke",
@@ -177,3 +168,35 @@ STATION_NAMES = {
     "WPORT": "Westport",
     "WXFRD": "Wexford",
 }
+
+
+# Parallel API codes and older stored rows for the same station.
+STATION_ALIASES = {
+    "ADAMF": "ADMTN", "ADAMS": "ADMTN",
+    "CLONF": "CLDKN", "CLONS": "CLDKN",
+    "HAZEF": "HZLCH", "HAZES": "HZLCH",
+    "KISHF": "KISHO", "KISHS": "KISHO",
+    "PWESF": "CHORC",
+}
+
+
+def canonical_station(code):
+    code = code.strip().upper()
+    return STATION_ALIASES.get(code, code)
+
+
+def station_codes(codes):
+    """One entry per station name, even when configuration repeats API aliases."""
+    by_name = {}
+    for code in sorted({canonical_station(code) for code in codes if code.strip()}):
+        by_name.setdefault(STATION_NAMES.get(code, code).casefold(), code)
+    return tuple(by_name[name] for name in sorted(by_name))
+
+
+PLACE_NAMES = {name.casefold(): name for name in STATION_NAMES.values()}
+PLACE_NAMES.update({
+    "connolly": STATION_NAMES["CNLLY"],
+    "pearse": STATION_NAMES["PERSE"],
+    "heuston": STATION_NAMES["HSTON"],
+    "hazelhatch": STATION_NAMES["HZLCH"],
+})

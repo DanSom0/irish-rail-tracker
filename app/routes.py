@@ -17,7 +17,13 @@ from sqlalchemy import DateTime, case, cast, func, text, tuple_
 
 from app.extensions import db
 from app.models import Observation
-from app.stations import STATION_NAMES
+from app.stations import (
+    PLACE_NAMES,
+    STATION_ALIASES,
+    STATION_NAMES,
+    canonical_station,
+    station_codes,
+)
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
@@ -25,17 +31,41 @@ DUBLIN = ZoneInfo("Europe/Dublin")
 
 @dashboard.app_template_filter("station_name")
 def station_name(code):
-    return STATION_NAMES.get(code, code)
+    return STATION_NAMES.get(canonical_station(code), code)
 
 
 @dashboard.app_template_filter("sort_stations")
 def sort_stations(codes):
-    return sorted(codes, key=lambda code: (station_name(code).casefold(), code))
+    return list(station_codes(codes))
 
 
 @dashboard.app_template_filter("place_name")
 def place_name(value):
-    return STATION_NAMES.get(value, value)
+    return STATION_NAMES.get(canonical_station(value), PLACE_NAMES.get(value.strip().casefold(), value))
+
+
+@dashboard.app_template_filter("delay_text")
+def delay_text(value):
+    if value == 0:
+        return "On time"
+    amount = f"{abs(value):.1f}".rstrip("0").rstrip(".")
+    if amount == "0":
+        amount = "<0.1"
+    return f"{amount} min {'early' if value < 0 else 'late'}"
+
+
+@dashboard.app_template_filter("minutes_ago")
+def minutes_ago(value):
+    return max(0, int((datetime.now(UTC) - value).total_seconds() // 60))
+
+
+@dashboard.app_template_filter("age_text")
+def age_text(minutes):
+    for unit, duration in (("day", 1440), ("hour", 60)):
+        if minutes >= duration:
+            count = minutes // duration
+            return f"{count} {unit}{'' if count == 1 else 's'}"
+    return f"{minutes} minute{'' if minutes == 1 else 's'}"
 
 
 @dashboard.app_template_filter("service_kind")
@@ -59,9 +89,9 @@ def remember_station(response):
     if request.endpoint == "dashboard.station_detail":
         code = request.view_args["code"]
     if code and response.status_code in (200, 302) and (
-        code in STATION_NAMES or code in current_app.config["STATION_CODES"]
+        canonical_station(code) in STATION_NAMES or code in current_app.config["STATION_CODES"]
     ):
-        response.set_cookie("station", code, max_age=90 * 24 * 60 * 60,
+        response.set_cookie("station", canonical_station(code), max_age=90 * 24 * 60 * 60,
                             httponly=True, samesite="Lax", secure=request.is_secure)
     return response
 
@@ -95,20 +125,36 @@ def health():
     return jsonify(status="ok", database="connected")
 
 
+def _observations():
+    """Read legacy alias rows as one station, keeping the newest train reading."""
+    station = case(STATION_ALIASES, value=Observation.station, else_=Observation.station)
+    return db.select(
+        *(column for column in Observation.__table__.columns if column.name != "station"),
+        station.label("station"),
+    ).where(Observation.fetched_at <= datetime.now(UTC)).distinct(
+        station, Observation.train_code, Observation.train_date,
+    ).order_by(station, Observation.train_code, Observation.train_date,
+               Observation.fetched_at.desc(), Observation.id.desc()).subquery().c
+
+
 def _context(station="", *, strict=False):
     """One grouped query supplies station coverage and current network figures."""
+    station = canonical_station(station)
+    observations = _observations()
     now = datetime.now(UTC)
     local_now = now.astimezone(DUBLIN)
     cutoff = now - timedelta(minutes=30)
-    recent = Observation.fetched_at.between(cutoff, now)
-    today = Observation.train_date == local_now.date().isoformat()
+    recent = observations.fetched_at.between(cutoff, now)
+    yesterday = local_now.date() - timedelta(days=1)
+    today = observations.train_date == local_now.date().isoformat()
     rows = db.session.execute(db.select(
-        Observation.station,
-        func.max(Observation.fetched_at).label("last_fetch"),
+        observations.station,
+        func.count().filter(observations.train_date == yesterday.isoformat()).label("yesterday_readings"),
+        func.max(observations.fetched_at).label("last_fetch"),
         func.count().filter(recent).label("readings"),
-        func.avg(Observation.delay_minutes).filter(recent).label("average_delay"),
-        func.avg(Observation.delay_minutes).filter(today).label("today_average"),
-    ).group_by(Observation.station).order_by(Observation.station)).all()
+        func.avg(observations.delay_minutes).filter(recent).label("average_delay"),
+        func.avg(observations.delay_minutes).filter(today).label("today_average"),
+    ).group_by(observations.station).order_by(observations.station)).all()
     observed = {row.station: row for row in rows}
     stations = sort_stations(set(current_app.config["STATION_CODES"]) | observed.keys())
     if station not in stations and station not in STATION_NAMES:
@@ -132,16 +178,24 @@ def _context(station="", *, strict=False):
     active = [row for row in selected if row.readings]
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max((row.last_fetch for row in selected), default=None)
-    configured = set(current_app.config["STATION_CODES"])
+    configured = set(station_codes(current_app.config["STATION_CODES"]))
     coverage = {
         "reporting": sum(bool(observed[code].readings) for code in configured if code in observed),
         "total": len(configured),
     }
-    remembered = request.cookies.get("station", "")
+    remembered = canonical_station(request.cookies.get("station", ""))
     context = {
         "coverage": coverage,
+        "yesterday": yesterday.isoformat(),
+        "yesterday_url": url_for("dashboard.route_averages", day="yesterday", station=station)
+        if any(row.yesterday_readings for row in selected) else None,
+        "empty_reason": "Overnight service can be sparse; empty fetches and collection gaps are not recorded."
+        if not service_hours else "Coverage is limited to stored readings; empty fetches and collection gaps are not recorded.",
+
         "remembered_station": remembered if remembered in stations or remembered in STATION_NAMES else "",
         "stations": stations, "station": station, "station_status": station_status,
+        "has_station_metrics": any(row["readings"] or row["today_average"] is not None
+                                   for row in station_status),
         "highest_delay": highest_delay, "last_updated": last_updated,
         "age_minutes": max(0, int((now - last_updated).total_seconds() // 60))
         if last_updated else None,
@@ -162,16 +216,17 @@ def _context(station="", *, strict=False):
 
 def _latest_readings(context, *, recent=False):
     """One latest stored station reading per train/date, within the selected scope."""
-    query = db.select(Observation).where(Observation.fetched_at <= context["now"])
+    observations = _observations()
+    query = db.select(*observations)
     if recent:
-        query = query.where(Observation.fetched_at >= context["cutoff"])
+        query = query.where(observations.fetched_at >= context["cutoff"])
     else:
-        query = query.where(Observation.train_date == context["today_date"])
+        query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
     if context["station"]:
-        query = query.where(Observation.station == context["station"])
-    return query.distinct(Observation.train_code, Observation.train_date).order_by(
-        Observation.train_code, Observation.train_date,
-        Observation.fetched_at.desc(), Observation.id.desc(),
+        query = query.where(observations.station == context["station"])
+    return query.distinct(observations.train_code, observations.train_date).order_by(
+        observations.train_code, observations.train_date,
+        observations.fetched_at.desc(), observations.id.desc(),
     ).subquery()
 
 
@@ -179,16 +234,18 @@ def _train_summary(context, *, recent=False):
     latest = _latest_readings(context, recent=recent).c
     return db.session.execute(db.select(
         func.count().label("trains"),
-        (100.0 * func.count().filter(latest.delay_minutes.between(0, 1))
+        (100.0 * func.count().filter(latest.delay_minutes <= 1)
          / func.nullif(func.count(), 0)).label("on_time"),
         func.avg(latest.delay_minutes).label("average_delay"),
         func.count().filter(latest.delay_minutes >= 6).label("major"),
     )).one()
 
 
-def _services(context, view="delays"):
+def _services(context, view="delays", *, significant=False):
     latest = _latest_readings(context, recent=True).c
     query = db.select(*latest)
+    if significant:
+        query = query.where(latest.delay_minutes >= 2)
     if view == "next":
         # Stored times can include arrivals; only valid local schedules support this view.
         scheduled = case((
@@ -240,7 +297,7 @@ def _paginate(query, per_page=15):
 @dashboard.get("/")
 def index():
     context = _context(request.args.get("station", ""))
-    services = db.session.execute(_services(context).limit(5)).all()
+    services = db.session.execute(_services(context, significant=True).limit(5)).all()
     return render_template(
         "dashboard.html", title="Overview", active="overview", **context,
         summary=_train_summary(context), current_delays=services,
@@ -258,6 +315,9 @@ def stations():
 
 @dashboard.get("/stations/<code>")
 def station_detail(code):
+    if code != canonical_station(code):
+        return redirect(url_for("dashboard.station_detail", code=canonical_station(code),
+                                view=request.args.get("view", "next")))
     context = _context(code, strict=True)
     view = "next" if request.args.get("view", "next") == "next" else "delays"
     pagination = _paginate(_services(context, view))
@@ -271,6 +331,12 @@ def station_detail(code):
 @dashboard.get("/routes")
 def route_averages():
     context = _context(request.args.get("station", ""))
+    day = request.args.get("day", "today")
+    if day not in ("today", "yesterday"):
+        abort(404)
+    if day == "yesterday":
+        context["report_date"] = context["yesterday"]
+        context["today"] = datetime.fromisoformat(context["yesterday"]).strftime("%d %b %Y")
     latest = _latest_readings(context).c
     query = db.select(
         latest.origin, latest.destination,
@@ -281,7 +347,7 @@ def route_averages():
     )
     return render_template(
         "routes.html", title="Route performance", active="routes", **context,
-        pagination=_paginate(query),
+        pagination=_paginate(query), day=day,
     )
 
 

@@ -79,8 +79,8 @@ def test_dashboard_renders_observations_and_aggregates(client, dashboard_data, d
     response = client.get("/")
     page = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert "A123" in page and "Connolly" in page and "Bray" in page
-    assert f"{delay}.0 min" in page and label in page
+    assert ("A123" in page) is (delay >= 2)
+    assert label in page
     assert '<meta http-equiv="refresh" content="60">' in page
     assert "Europe/Dublin" in page and "13:00:00 IST (UTC+0100)" in page
     assert context["age_minutes"] == 0
@@ -90,7 +90,7 @@ def test_dashboard_empty_state(client, dashboard_data):
     _, context = dashboard_data
     response = client.get("/")
     assert response.status_code == 200
-    assert "No data yet" in response.get_data(as_text=True)
+    assert "Current punctuality is not available" in response.get_data(as_text=True)
     assert context["summary"].trains == 0
     assert context["summary"].on_time is None
     assert context["summary"].average_delay is None
@@ -154,7 +154,7 @@ def test_current_window_and_freshness(client, dashboard_data, clock):
     seed(
         {"station": "TARA", "delay_minutes": 99,
          "fetched_at": clock.instant - timedelta(minutes=31)},
-        {"delay_minutes": 1, "fetched_at": clock.instant - timedelta(minutes=7)},
+        {"delay_minutes": 2, "fetched_at": clock.instant - timedelta(minutes=7)},
     )
     page = client.get("/").get_data(as_text=True)
     assert [row.station for row in context["current_delays"]] == ["CNLLY"]
@@ -358,13 +358,13 @@ def test_latest_train_reading_drives_rows_and_all_averages(client, dashboard_dat
          "fetched_at": clock.instant - timedelta(minutes=35)},
         {"train_code": "SAME", "station": "TARA", "delay_minutes": 10,
          "fetched_at": clock.instant - timedelta(minutes=5)},
-        {"train_code": "SAME", "station": "PERSE", "delay_minutes": 0},
+        {"train_code": "SAME", "station": "PERSE", "delay_minutes": 2},
         {"train_code": "OTHER", "delay_minutes": 6},
     )
     page = client.get("/").get_data(as_text=True)
     rows = context["current_delays"]
     assert [(row.train_code, row.station, row.delay_minutes) for row in rows] == [
-        ("OTHER", "CNLLY", 6), ("SAME", "PERSE", 0),
+        ("OTHER", "CNLLY", 6), ("SAME", "PERSE", 2),
     ]
     assert [(reading.station, reading.delay_minutes)
             for reading in context["reading_details"][rows[1].id]] == [("TARA", 10), ("CNLLY", 40)]
@@ -372,13 +372,13 @@ def test_latest_train_reading_drives_rows_and_all_averages(client, dashboard_dat
     assert '<summary>Details</summary>' in page and '40 min late' in page
     assert context["network"]["readings"] == 3  # Station readings remain distinct from trains.
     assert context["network"]["trains"] == 2
-    assert context["network"]["average_delay"] == 3
-    assert context["network"]["on_time"] == 50
+    assert context["network"]["average_delay"] == 4
+    assert context["network"]["on_time"] == 0
     assert context["summary"].trains == 2
-    assert context["summary"].average_delay == 3
+    assert context["summary"].average_delay == 4
     client.get("/routes")
     row = context["pagination"]["items"][0]
-    assert row.trains == 2 and row.average_delay == 3
+    assert row.trains == 2 and row.average_delay == 4
     client.get("/?station=TARA")
     assert context["summary"].trains == 1
     assert context["summary"].average_delay == 10
@@ -391,7 +391,7 @@ def test_train_dates_are_separate_and_equal_timestamps_are_deterministic(
     seed, context = dashboard_data
     seed(
         {"train_code": "SAME", "delay_minutes": 8},
-        {"train_code": "SAME", "station": "TARA", "delay_minutes": 1},
+        {"train_code": "SAME", "station": "TARA", "delay_minutes": 2},
         {"train_code": "SAME", "train_date": "2026-09-21", "delay_minutes": 5},
     )
     client.get("/")
@@ -399,7 +399,7 @@ def test_train_dates_are_separate_and_equal_timestamps_are_deterministic(
         ("2026-09-21", "CNLLY"), ("2026-09-22", "TARA"),
     ]
     assert context["summary"].trains == 1
-    assert context["summary"].average_delay == 1
+    assert context["summary"].average_delay == 2
     assert context["network"]["trains"] == 2
     client.get("/")
     assert context["current_delays"][1].station == "TARA"
@@ -431,7 +431,7 @@ def test_next_services_use_dublin_schedules_and_reported_delay(
     page = client.get("/stations/CNLLY").get_data(as_text=True)
     assert [row.train_code for row in context["pagination"]["items"]] == expected
     assert 'href="/stations/CNLLY"' not in page  # No repeated self-link in service rows.
-    assert '<th scope="col">Scheduled</th>' in page
+    assert '<th scope="col" class="numeric">Scheduled</th>' in page
     assert 'inferred from matching origin and destination names' in page
     client.get("/stations/CNLLY?view=delays")
     assert context["pagination"]["total"] == len(rows)
@@ -441,9 +441,11 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     seed, _ = dashboard_data
     seed({})
     page = client.get("/").get_data(as_text=True)
-    assert page.index('Where are you travelling from?') < page.index('Last 30 minutes')
+    assert page.index('Find your station') < page.index('Last 30 minutes')
     for code in ("CNLLY", "PERSE", "HSTON", "TARA", "MHIDE"):
         assert f'<option value="{code}">{routes.STATION_NAMES[code]}</option>' in page
+    for code in ("CNLLY", "PERSE", "TARA", "HSTON", "GCDK"):
+        assert f'<a href="/stations/{code}">{routes.STATION_NAMES[code]}</a>' in page
     assert "Check your station&#39;s" in page or "Check your station's" in page
     assert 'Independent project, not affiliated with Iarnród Éireann' in page
     assert 'Daniel English' in page
@@ -457,16 +459,23 @@ def test_static_names_cover_configured_stations(app, client, dashboard_data, mon
 
     from app.stations import STATION_NAMES
 
-    example = next(line.split("=", 1)[1] for line in Path(".env.example").read_text().splitlines()
-                   if line.startswith("STATION_CODES="))
-    codes = set(example.split(",")) | set(app.config["STATION_CODES"])
+    examples = []
+    for name in (".env.example", ".env.production.example"):
+        example = next(line.split("=", 1)[1] for line in Path(name).read_text().splitlines()
+                       if line.startswith("STATION_CODES="))
+        assert len(example.split(",")) == len(set(example.split(",")))
+        examples.extend(example.split(","))
+    codes = set(examples) | set(app.config["STATION_CODES"])
     assert all(STATION_NAMES.get(code) for code in codes)
     monkeypatch.setitem(app.config, "STATION_CODES", tuple(codes))
-    for path in ("/", "/stations", "/routes", "/status"):
+    for path in ("/", "/stations", "/routes"):
         page = client.get(path).get_data(as_text=True)
         assert "Unlisted station" not in page
         for code in codes:
             assert STATION_NAMES[code] in page
+    assert "No stations have a reading in the last 30 minutes" in (
+        client.get("/status").get_data(as_text=True)
+    )
     assert client.get("/stations/GCDK").status_code == 200
 
 
@@ -523,7 +532,7 @@ def test_station_cookie_set_preselect_and_forget(client, dashboard_data):
     page = client.get("/").get_data(as_text=True)
     assert '<option value="TARA" selected>' in page
     assert "Forget my station" in page
-    assert "Dublin, right now." in page  # Preference preselects; network stays network-wide.
+    assert "Dublin rail departures" in page  # Preference preselects; network stays network-wide.
     response = client.get("/forget-station")
     assert "Max-Age=0" in response.headers["Set-Cookie"]
     assert '<option value="TARA" selected>' not in client.get("/").get_data(as_text=True)
@@ -550,3 +559,141 @@ def test_shortcut_station_can_be_reselected_without_configured_readings(client, 
     page = client.get("/").get_data(as_text=True)
     assert '<option value="GCDK" selected>Grand Canal Dock</option>' in page
     assert client.get("/stations?station=GCDK").location == "/stations/GCDK"
+
+
+def test_early_trains_count_as_on_time_with_sample_size(client, dashboard_data):
+    seed, context = dashboard_data
+    seed({"delay_minutes": -2}, {"delay_minutes": 1}, {"delay_minutes": 3})
+    page = client.get("/").get_data(as_text=True)
+    assert context["network"]["on_time"] == pytest.approx(200 / 3)
+    assert context["summary"].on_time == pytest.approx(200 / 3)
+    assert "Based on 3 trains" in page
+
+
+@pytest.mark.parametrize("path", ["/", "/stations", "/routes", "/stations/CNLLY?view=delays"])
+def test_negative_averages_use_early_wording(client, dashboard_data, path):
+    seed, _ = dashboard_data
+    seed({"delay_minutes": -1})
+    page = client.get(path).get_data(as_text=True)
+    assert "1 min early" in page
+    assert "-1.0 min" not in page
+
+
+def test_significant_delays_threshold_and_empty_state(client, dashboard_data):
+    seed, context = dashboard_data
+    seed({"delay_minutes": -2}, {"delay_minutes": 0}, {"delay_minutes": 1})
+    page = client.get("/").get_data(as_text=True)
+    assert context["current_delays"] == []
+    assert "No significant delays in the latest readings" in page
+    assert "Limited coverage" in page
+    assert "departure-board" not in page
+    seed({"train_code": "LATE", "delay_minutes": 2})
+    client.get("/")
+    assert [r.train_code for r in context["current_delays"]] == ["LATE"]
+
+
+def test_aliases_share_one_picker_entry_and_coverage(app, client, dashboard_data, monkeypatch):
+    seed, context = dashboard_data
+    monkeypatch.setitem(app.config, "STATION_CODES", ("HZLCH", "HAZEF", "HAZES", "HZLCH"))
+    seed({"station": "HAZEF", "train_code": "SAME", "delay_minutes": 10},
+         {"station": "HZLCH", "train_code": "SAME", "delay_minutes": 2})
+    page = client.get("/").get_data(as_text=True)
+    assert page.count('<option value="HZLCH"') == 1
+    assert '<option value="HAZEF"' not in page and '<option value="HAZES"' not in page
+    assert context["coverage"] == {"reporting": 1, "total": 1}
+    client.get("/stations/HZLCH?view=delays")
+    assert context["pagination"]["total"] == 1
+    assert context["summary"].average_delay == 2
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_recent_reading_pluralisation(client, dashboard_data, count):
+    seed, _ = dashboard_data
+    seed(*({} for _ in range(count)))
+    for path in ("/stations", "/status"):
+        page = client.get(path).get_data(as_text=True)
+        assert f"{count} recent reading{'s' if count != 1 else ''}" in page
+        assert "1 recent readings" not in page
+
+
+@pytest.mark.parametrize("path", ["/", "/routes", "/stations", "/stations/CNLLY"])
+def test_empty_sections_and_yesterday_link(client, dashboard_data, clock, path):
+    seed, _ = dashboard_data
+    page = client.get(path).get_data(as_text=True)
+    assert "No data yet" not in page and "<thead>" not in page and "0 routes" not in page
+    assert "View yesterday" not in page
+    seed({"train_date": "2026-09-21", "fetched_at": clock.instant - timedelta(days=1)})
+    page = client.get(path).get_data(as_text=True)
+    assert "View yesterday" in page
+    page = client.get("/routes?day=yesterday&station=CNLLY").get_data(as_text=True)
+    assert "Yesterday" in page and "1 train" in page
+
+
+@pytest.mark.parametrize("value,expected", [
+    (-1, "1 min early"), (-0.5, "0.5 min early"), (-0.01, "<0.1 min early"),
+    (0, "On time"), (1, "1 min late"), (15, "15 min late"),
+])
+def test_delay_wording_for_averages_and_readings(value, expected):
+    assert routes.delay_text(value) == expected
+
+
+def test_official_place_names_and_defensive_picker_dedupe():
+    from app.stations import STATION_ALIASES, station_codes
+
+    assert routes.place_name("connolly") == routes.STATION_NAMES["CNLLY"]
+    assert routes.place_name(" HazelHatch ") == routes.STATION_NAMES["HZLCH"]
+    assert routes.place_name("dlery") == routes.STATION_NAMES["DLERY"]
+    assert station_codes(("HAZES", "HZLCH", "HAZEF", "hzlch", "CNLLY", "CNLLY")) == (
+        "CNLLY", "HZLCH",
+    )
+    assert len(routes.sort_stations(["CLDKN", "CLONF", "CLONS"])) == 1
+    assert len(set(routes.STATION_NAMES.values())) == len(routes.STATION_NAMES)
+    assert station_codes((*STATION_ALIASES, *STATION_ALIASES.values())) == (
+        "ADMTN", "CLDKN", "HZLCH", "KISHO", "CHORC",
+    )
+
+
+@pytest.mark.parametrize("alias,canonical", [
+    ("ADAMF", "ADMTN"), ("ADAMS", "ADMTN"),
+    ("CLONF", "CLDKN"), ("CLONS", "CLDKN"),
+    ("HAZEF", "HZLCH"), ("HAZES", "HZLCH"),
+    ("KISHF", "KISHO"), ("KISHS", "KISHO"),
+    ("PWESF", "CHORC"),
+])
+def test_legacy_station_aliases_share_one_board(client, dashboard_data, alias, canonical):
+    seed, context = dashboard_data
+    seed({"station": alias, "delay_minutes": 4})
+    page = client.get(f"/stations/{canonical}?view=delays").get_data(as_text=True)
+    assert context["pagination"]["total"] == 1
+    assert routes.STATION_NAMES[canonical] in page
+    assert routes.place_name(alias) == routes.STATION_NAMES[canonical]
+    assert client.get(f"/stations/{alias}").location.startswith(f"/stations/{canonical}")
+
+
+def test_yesterday_is_dublin_scoped_and_preserved_in_pagination(client, dashboard_data, clock):
+    seed, _ = dashboard_data
+    clock.instant = datetime.fromisoformat("2026-09-22T23:30:00+00:00")
+    seed(*({"train_date": "2026-09-22", "origin": f"Origin {i}",
+            "fetched_at": clock.instant - timedelta(hours=2)} for i in range(17)))
+    assert "View yesterday" not in client.get("/stations/TARA").get_data(as_text=True)
+    page = client.get("/routes?day=yesterday&station=CNLLY").get_data(as_text=True)
+    assert "17 routes" in page and "day=yesterday" in page
+    assert client.get("/routes?day=invalid").status_code == 404
+
+
+def test_freshness_has_relative_text_and_precise_accessible_time(client, dashboard_data, clock):
+    seed, _ = dashboard_data
+    instant = clock.instant - timedelta(minutes=7)
+    seed({"fetched_at": instant})
+    page = client.get("/").get_data(as_text=True)
+    assert "Updated 7 minutes ago · Dublin time</time>" in page
+    assert f'datetime="{instant.isoformat()}"' in page
+    assert 'title="22 Sep 2026, 12:53:00 IST (UTC+0100)"' in page
+
+
+@pytest.mark.parametrize("minutes,expected", [
+    (0, "0 minutes"), (1, "1 minute"), (7, "7 minutes"),
+    (60, "1 hour"), (720, "12 hours"), (1440, "1 day"),
+])
+def test_freshness_uses_readable_relative_units(minutes, expected):
+    assert routes.age_text(minutes) == expected

@@ -5,7 +5,7 @@
   <h2>Every five minutes</h2>
   <p>We poll selected stations using Iarnród Éireann's <a href="https://api.irishrail.ie/realtime/realtime.asmx">public realtime API</a> every 5 minutes. Pages refresh every 60 seconds. All displayed times use Europe/Dublin, including daylight saving time.</p>
   <h2>What “late” means</h2>
-  <p>The API's Late field reports delay in minutes. “On time” in the headline means 0–1 minutes late. Scheduled times are timetable times, using the arrival time for terminating trains.</p>
+  <p>The API's Late field reports delay in minutes. “On time” in the headline means early or no more than 1 minute late. Scheduled times are timetable times, using the arrival time for terminating trains.</p>
   <h2>A last reading, not a confirmed arrival</h2>
   <p>Each new poll replaces the stored reading for that train at that station on that date. The retained value is the last reading before a train leaves the board, not a confirmed arrival delay. A reading can change while the train remains on the board.</p>
   <p>Network summaries count each train once using its latest station reading. Details show the train code and available earlier readings at other stations; they are not a complete poll history or a live train location.</p>
