@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% from 'components.html' import freshness, coverage_label, empty_state with context %}
+{% block content %}
+<div class="page-heading"><p class="eyebrow">Collection health</p><h1>Data status</h1><p>How recently each station supplied observations.</p></div>
+{{ freshness(last_updated, age_minutes) }}
+<section class="status-summary card">{{ coverage_label(coverage) }}<p class="note">Reporting means at least one reading in the last 30 minutes. Empty fetches and fetch failures are not stored, so gaps do not tell us whether services are running.</p></section>
+<section class="card" aria-labelledby="status-heading">
+  <div class="section-heading card-heading"><h2 id="status-heading">Latest station update</h2><span>Alphabetical by station</span></div>
+  {% if not network.readings %}{{ empty_state("No stations have a reading in the last 30 minutes; the times below show their last stored updates.") }}{% endif %}
+  {% if last_updated %}<ul class="status-list">
+    {% for row in station_status %}<li><a class="station-code" href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a><span class="coverage">{% if row.readings %}{{ row.readings }} recent reading{{ '' if row.readings == 1 else 's' }}{% elif network.readings %}No recent readings{% endif %}</span><div class="fetch-time">{% if row.last_fetch %}{{ freshness(row.last_fetch, row.last_fetch|minutes_ago) }}{% endif %}</div></li>{% endfor %}
+  </ul>{% endif %}
+</section>
+{% endblock %}

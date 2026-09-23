@@ -1,0 +1,73 @@
+{% macro freshness(last_updated, age_minutes) %}
+{% if last_updated %}<p class="freshness"><time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago · Dublin time</time></p>{% endif %}
+{% endmacro %}
+
+{% macro delay_badge(delay) %}
+<span class="badge {{ 'on-time' if delay <= 1 else 'minor' if delay <= 5 else 'major' }}">{{ delay|delay_text }}</span>
+{% endmacro %}
+
+{% macro empty_state(message) %}
+<p class="empty">{{ message }} {{ empty_reason }}{% if yesterday_url %} <a href="{{ yesterday_url }}">View yesterday</a>{% endif %}</p>
+{% endmacro %}
+
+{% macro daily(summary, today) %}
+<section class="daily" aria-labelledby="daily-heading">
+  <div class="section-heading"><h2 id="daily-heading">Today's performance</h2><span>{{ today }}</span></div>
+  {% if summary.trains %}
+  <dl class="daily-metrics">
+    <div><dt>On time</dt><dd>{{ '%.0f%%'|format(summary.on_time) }} <span class="sample">Based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}</span></dd></div>
+    <div><dt>Average delay</dt><dd>{{ summary.average_delay|delay_text }}</dd></div>
+    <div><dt>Trains tracked</dt><dd>{{ summary.trains }}</dd></div>
+  </dl>
+  <p class="note">Latest reading per train. On time includes early trains and delays of up to 1 minute.</p>
+  {% else %}{{ empty_state("Today's performance is not yet available because no readings have been stored for today.") }}{% endif %}
+</section>
+{% endmacro %}
+
+{% macro station_filter(stations, station, endpoint, label='Station', button='Apply', all_stations=true) %}
+<form class="station-filter" method="get" action="{{ url_for(endpoint) }}">
+  {% if day is defined and day == "yesterday" %}<input type="hidden" name="day" value="yesterday">{% endif %}
+  <label for="station">{{ label }}</label>
+  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in (stations + ([station] if station and station not in stations else []))|sort_stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}</option>{% endfor %}</select>
+  <button type="submit">{{ button }}</button>
+</form>
+{% endmacro %}
+
+{% macro services(rows, reading_details, station='') %}
+{% if rows %}<table class="departure-board">
+  <caption class="visually-hidden">Scheduled services, destinations and latest reported delays</caption>
+  <thead><tr><th scope="col" class="numeric">Scheduled</th><th scope="col">Destination</th><th scope="col" class="numeric">Delay</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr>
+    <td class="service-time">{{ row.scheduled_time }}</td>
+    <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if station %}<small>{{ row|service_kind }}</small>{% endif %}{% if not station %}<small>At <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
+      <details class="reading-details"><summary>Details</summary>
+        <p>Train {{ row.train_code }}</p>
+        <p>From {{ row.origin|place_name }} · {{ row.train_date }}</p>
+        {{ freshness(row.fetched_at, row.fetched_at|minutes_ago) }}
+        {% if reading_details.get(row.id) %}<ul>{% for reading in reading_details[row.id] %}<li>{{ reading.station|station_name }} · {{ delay_badge(reading.delay_minutes) }}{{ freshness(reading.fetched_at, reading.fetched_at|minutes_ago) }}</li>{% endfor %}</ul>{% endif %}
+        <p>Latest stored reading per station; earlier polls at the same station are replaced. The reporting station is not a live train location.</p>
+      </details>
+    </th>
+    <td class="numeric">{{ delay_badge(row.delay_minutes) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}{{ empty_state("No recent readings match this service view. Try the other board view or check after the next poll.") }}{% endif %}
+{% endmacro %}
+
+{% macro pagination_links(pagination, endpoint, station='', code=none, view=none, day=none) %}
+{% if pagination.pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+  {% if pagination.page > 1 %}<a href="{{ url_for(endpoint, page=pagination.page-1, station=station, code=code, view=view, day=day) }}" rel="prev">← Previous</a>{% else %}<span></span>{% endif %}
+  <span>{{ pagination.page }} / {{ pagination.pages }}</span>
+  {% if pagination.page < pagination.pages %}<a href="{{ url_for(endpoint, page=pagination.page+1, station=station, code=code, view=view, day=day) }}" rel="next">Next →</a>{% else %}<span></span>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{% macro coverage_label(coverage) %}
+<span class="coverage{{ ' limited' if coverage.reporting < coverage.total else '' }}">{% if coverage.reporting < coverage.total %}Limited coverage · {{ coverage.reporting }} of {{ coverage.total }} stations reporting{% else %}All {{ coverage.total }} stations reporting{% endif %}</span>
+{% endmacro %}
