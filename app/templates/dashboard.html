@@ -1,13 +1,16 @@
 {% extends 'base.html' %}
 {% from 'components.html' import daily, services, station_filter, empty_state with context %}
 {% block content %}
-<div class="page-heading"><h1>Dublin rail services</h1><p>Check your station's latest services and reported delays.</p></div>
-<section class="station-start" aria-label="Choose your station">
+<section class="station-start" aria-labelledby="home-heading">
+  <div class="intro-content">
+  <div class="page-heading"><h1 id="home-heading">Dublin rail services</h1><p>Check your station's latest services and reported delays.</p></div>
   <div class="station-picker-row">
     {{ station_filter(stations, station or remembered_station, 'dashboard.stations', 'Find your station', 'View board', false) }}
     {% if remembered_station %}<a class="forget-station" href="{{ url_for('dashboard.forget_station') }}">Forget my station</a>{% endif %}
   </div>
   {% if reporting_shortcuts %}<nav class="shortcuts" aria-label="Popular stations"><span>Popular stations</span>{% for code in reporting_shortcuts %}<a href="{{ url_for('dashboard.station_detail', code=code) }}">{{ code|station_name }}</a>{% endfor %}</nav>{% endif %}
+  </div>
+  <svg class="intro-rail" viewBox="0 0 280 128" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="2"><path d="M8 38 C82 38 95 66 156 66 S228 93 272 93M8 58 C82 58 95 86 156 86 S228 113 272 113"/><path d="M30 38v20m43-17v20m43-9v20m43-6v20m43-13v20m43-2v20"/></g><g fill="currentColor"><circle cx="73" cy="50" r="4"/><circle cx="158" cy="76" r="4"/><circle cx="244" cy="101" r="4"/></g></svg>
 </section>
 <section class="network-card" aria-labelledby="network-heading">
   <div class="section-heading"><h2 id="network-heading">Network right now{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
@@ -20,11 +23,13 @@
   {% else %}{{ empty_state("Current punctuality is not available because there are no recent readings.") }}{% endif %}
   <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}</p>
 </section>
-{% if current_delays %}
+<div class="homepage-lower">
 <section class="current-delays" aria-labelledby="delays-heading">
   <div class="section-heading"><h2 id="delays-heading">Largest current delays</h2><span>2+ minutes late</span></div>
-  {{ services(current_delays, reading_details) }}
+  {% if current_delays %}{{ services(current_delays, reading_details) }}
+  {% elif network.trains %}<p class="no-delays">No significant delays in the latest readings · {{ 'limited coverage; only reporting stations are represented' if coverage.reporting < coverage.total else 'all monitored stations up to date' }}.</p>
+  {% else %}<p class="no-delays">Current delays are unavailable until a monitored station returns fresh readings.</p>{% endif %}
 </section>
-{% elif network.trains %}<p class="no-delays">No significant delays in the latest readings · {{ 'limited coverage; only reporting stations are represented' if coverage.reporting < coverage.total else 'all monitored stations up to date' }}.</p>{% endif %}
 {{ daily(summary, today) }}
+</div>
 {% endblock %}
