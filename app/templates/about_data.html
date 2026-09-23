@@ -8,7 +8,7 @@
   <p>The API's Late field reports delay in minutes. “On time” in the headline means early or no more than 1 minute late. Scheduled times are timetable times, using the arrival time for terminating trains.</p>
   <h2>A last reading, not a confirmed arrival</h2>
   <p>Each new poll replaces the stored reading for that train at that station on that date. The retained value is the last reading before a train leaves the board, not a confirmed arrival delay. A reading can change while the train remains on the board.</p>
-  <p>Network summaries count each train once using its latest reading at a monitored station. Details show the train code and available earlier readings at other stations; they are not a complete poll history or a live train location.</p>
+  <p>Current boards and network figures use only trains in each station’s latest stored poll when it is no more than 10 minutes old. Today’s performance keeps each train’s latest reading for the day, even after it leaves the board. Details show the train code and available earlier readings at other stations; they are not a complete poll history or a live train location.</p>
   <h2>Coverage and gaps</h2>
   <p>A monitored station is up to date when it has any reading in the last 30 minutes. Limited coverage means fewer than all monitored stations have recent readings. Stations with stored data outside the configured list are labelled “Not currently monitored”.</p>
   <p>We do not store empty successful fetches or fetch failures. A gap could reflect no trains on the board, a connection problem, or missing API data; we cannot distinguish these from the stored readings. A network figure describes tracked trains, not the whole railway.</p>

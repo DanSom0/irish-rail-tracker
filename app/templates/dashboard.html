@@ -8,7 +8,7 @@
   {% if remembered_station %}<a class="forget-station" href="{{ url_for('dashboard.forget_station') }}">Forget my station</a>{% endif %}</p>{% endif %}
 </section>
 <section class="network-card" aria-labelledby="network-heading">
-  <div class="section-heading"><h2 id="network-heading">Last 30 minutes{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
+  <div class="section-heading"><h2 id="network-heading">Current services{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
   {% if network.trains %}
   <dl class="network-metrics">
     <div><dt>On time</dt><dd><strong>{{ '%.0f%%'|format(network.on_time) }}</strong> <span class="sample">Based on {{ network.trains }} train{{ '' if network.trains == 1 else 's' }} · {% if network.total %}Across {{ network.total }} monitored station{{ '' if network.total == 1 else 's' }}{% else %}Not currently monitored{% endif %}</span></dd></div>

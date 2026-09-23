@@ -166,6 +166,54 @@ def test_current_window_and_freshness(client, dashboard_data, clock):
     assert context["highest_delay"] is None
 
 
+def test_current_views_only_show_latest_station_cycle_but_daily_stats_keep_all_trains(
+    client, dashboard_data, clock,
+):
+    seed, context = dashboard_data
+    seed(
+        {"train_code": "DEPARTED", "scheduled_time": "14:00", "delay_minutes": 9,
+         "fetched_at": clock.instant - timedelta(minutes=30)},
+        {"train_code": "PREVIOUS", "scheduled_time": "14:10", "delay_minutes": 7,
+         "fetched_at": clock.instant - timedelta(minutes=7)},
+        {"train_code": "ONBOARD", "scheduled_time": "14:20", "delay_minutes": 2},
+    )
+    home = client.get("/").get_data(as_text=True)
+    assert [row.train_code for row in context["current_delays"]] == ["ONBOARD"]
+    assert "DEPARTED" not in home and "PREVIOUS" not in home
+    assert context["summary"].trains == 3
+    assert context["summary"].major == 2
+    assert context["summary"].average_delay == 6
+    assert context["network"]["trains"] == 1
+    assert context["network"]["average_delay"] == 2
+    assert context["network"]["major"] == 0
+    for view in ("next", "delays"):
+        page = client.get(f"/stations/CNLLY?view={view}").get_data(as_text=True)
+        assert [row.train_code for row in context["pagination"]["items"]] == ["ONBOARD"]
+        assert "DEPARTED" not in page and "PREVIOUS" not in page
+        assert context["summary"].trains == 3
+    client.get("/stations")
+    assert next(row for row in context["station_status"] if row["station"] == "CNLLY")[
+        "average_delay"] == 2
+
+
+def test_latest_station_board_expires_after_ten_minutes(client, dashboard_data, clock):
+    seed, context = dashboard_data
+    seed(
+        {"train_code": "STALE", "delay_minutes": 9,
+         "fetched_at": clock.instant - timedelta(minutes=10, seconds=1)},
+        {"train_code": "CURRENT", "station": "TARA", "delay_minutes": 8,
+         "fetched_at": clock.instant - timedelta(minutes=10)},
+    )
+    home = client.get("/").get_data(as_text=True)
+    assert [row.train_code for row in context["current_delays"]] == ["CURRENT"]
+    assert "STALE" not in home
+    assert context["coverage"]["reporting"] == 2  # Status retains its 30-minute window.
+    assert context["summary"].trains == 2
+    assert context["reporting_shortcuts"] == ["TARA"]
+    client.get("/stations/CNLLY?view=delays")
+    assert context["pagination"]["total"] == 0
+
+
 @pytest.mark.parametrize("instant,expected", [
     ("2026-03-29T00:59:00+00:00", "29 Mar 2026, 00:59:00 GMT (UTC+0000)"),
     ("2026-03-29T01:00:00+00:00", "29 Mar 2026, 02:00:00 IST (UTC+0100)"),
@@ -443,7 +491,7 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     seed, _ = dashboard_data
     seed({})
     page = client.get("/").get_data(as_text=True)
-    assert page.index('Find your station') < page.index('Last 30 minutes')
+    assert page.index('Find your station') < page.index('Current services')
     for code in ("CNLLY", "PERSE", "HSTON", "TARA", "MHIDE"):
         assert f'<option value="{code}">{routes.STATION_NAMES[code]}</option>' in page
     assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
@@ -613,10 +661,10 @@ def test_aliases_share_one_picker_entry_and_coverage(app, client, dashboard_data
 def test_recent_reading_pluralisation(client, dashboard_data, count):
     seed, _ = dashboard_data
     seed(*({} for _ in range(count)))
-    for path in ("/stations", "/status"):
+    for path, phrase in (("/stations", "current service"), ("/status", "recent reading")):
         page = client.get(path).get_data(as_text=True)
-        assert f"{count} recent reading{'s' if count != 1 else ''}" in page
-        assert "1 recent readings" not in page
+        assert f"{count} {phrase}{'s' if count != 1 else ''}" in page
+        assert f"1 {phrase}s" not in page
 
 
 @pytest.mark.parametrize("path", ["/", "/routes", "/stations", "/stations/CNLLY"])
@@ -695,11 +743,21 @@ def test_freshness_has_relative_text_and_precise_accessible_time(client, dashboa
 
 
 @pytest.mark.parametrize("minutes,expected", [
-    (0, "0 minutes"), (1, "1 minute"), (7, "7 minutes"),
+    (0, "just now"), (1, "1 minute"), (7, "7 minutes"),
     (60, "1 hour"), (720, "12 hours"), (1440, "1 day"),
 ])
 def test_freshness_uses_readable_relative_units(minutes, expected):
     assert routes.age_text(minutes) == expected
+
+
+@pytest.mark.parametrize("age,expected", [
+    (timedelta(seconds=30), "Updated just now · Dublin time"),
+    (timedelta(minutes=1), "Updated 1 minute ago · Dublin time"),
+])
+def test_freshness_handles_under_a_minute_and_singular(client, dashboard_data, clock, age, expected):
+    seed, _ = dashboard_data
+    seed({"fetched_at": clock.instant - age})
+    assert expected in client.get("/").get_data(as_text=True)
 
 
 @pytest.mark.parametrize("scheduled,delay,expected", [

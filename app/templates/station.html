@@ -13,7 +13,7 @@
 
   {{ services(pagination['items'], reading_details, station) }}
   {{ pagination_links(pagination, 'dashboard.station_detail', code=station, view=view) }}
-  <details class="note board-note"><summary>About these readings</summary><p>Readings from the last 30 minutes. Scheduled times in Europe/Dublin. {% if view == 'next' %}Upcoming by scheduled time plus reported delay. {% endif %}Starts and terminations are inferred from matching origin and destination names; other readings are calling services.</p></details>
+  <details class="note board-note"><summary>About these readings</summary><p>Latest stored station board, when fetched within the last 10 minutes. Scheduled times in Europe/Dublin. {% if view == 'next' %}Upcoming by scheduled time plus reported delay. {% endif %}Starts and terminations are inferred from matching origin and destination names; other readings are calling services.</p></details>
 </section>
 <p class="note below-card"><a href="{{ url_for('dashboard.route_averages', station=station) }}">Route performance through {{ station|station_name }} →</a></p>
 {{ daily(summary, today) }}

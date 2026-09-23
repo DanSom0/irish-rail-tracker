@@ -27,6 +27,7 @@ from app.stations import (
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
+CURRENT_WINDOW = timedelta(minutes=10)
 
 
 @dashboard.app_template_filter("station_name")
@@ -61,6 +62,8 @@ def minutes_ago(value):
 
 @dashboard.app_template_filter("age_text")
 def age_text(minutes):
+    if minutes == 0:
+        return "just now"
     for unit, duration in (("day", 1440), ("hour", 60)):
         if minutes >= duration:
             count = minutes // duration
@@ -149,6 +152,13 @@ def _observations():
                Observation.fetched_at.desc(), Observation.id.desc()).subquery().c
 
 
+def _station_fetches(observations):
+    return db.select(
+        observations.station,
+        func.max(observations.fetched_at).label("last_fetch"),
+    ).group_by(observations.station).subquery()
+
+
 def _context(station="", *, strict=False):
     """One grouped query supplies station coverage and current network figures."""
     station = canonical_station(station)
@@ -156,7 +166,12 @@ def _context(station="", *, strict=False):
     now = datetime.now(UTC)
     local_now = now.astimezone(DUBLIN)
     cutoff = now - timedelta(minutes=30)
+    current_cutoff = now - CURRENT_WINDOW
     recent = observations.fetched_at.between(cutoff, now)
+    station_fetches = _station_fetches(observations)
+    current = (observations.fetched_at == station_fetches.c.last_fetch) & (
+        observations.fetched_at >= current_cutoff
+    )
     yesterday = local_now.date() - timedelta(days=1)
     today = observations.train_date == local_now.date().isoformat()
     rows = db.session.execute(db.select(
@@ -164,9 +179,11 @@ def _context(station="", *, strict=False):
         func.count().filter(observations.train_date == yesterday.isoformat()).label("yesterday_readings"),
         func.max(observations.fetched_at).label("last_fetch"),
         func.count().filter(recent).label("readings"),
-        func.avg(observations.delay_minutes).filter(recent).label("average_delay"),
+        func.count().filter(current).label("current_readings"),
+        func.avg(observations.delay_minutes).filter(current).label("average_delay"),
         func.avg(observations.delay_minutes).filter(today).label("today_average"),
-    ).group_by(observations.station).order_by(observations.station)).all()
+    ).join(station_fetches, observations.station == station_fetches.c.station)
+        .group_by(observations.station).order_by(observations.station)).all()
     observed = {row.station: row for row in rows}
     monitored_stations = station_codes(current_app.config["STATION_CODES"])
     configured = set(monitored_stations)
@@ -184,14 +201,15 @@ def _context(station="", *, strict=False):
             "station": code, "monitored": code in configured, "last_fetch": last_fetch,
             "stale": code in configured and service_hours and (last_fetch is None or last_fetch < cutoff),
             "readings": row.readings if row else 0,
+            "current_readings": row.current_readings if row else 0,
             "average_delay": row.average_delay if row else None,
             "today_average": row.today_average if row else None,
         })
     selected = [row for row in rows if row.station == station] if station else [
         row for row in rows if row.station in configured
     ]
-    readings = sum(row.readings for row in selected)
-    active = [row for row in selected if row.readings]
+    readings = sum(row.current_readings for row in selected)
+    active = [row for row in selected if row.current_readings]
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max((row.last_fetch for row in selected), default=None)
     coverage = {
@@ -211,9 +229,10 @@ def _context(station="", *, strict=False):
         "stations": stations, "station": station, "station_status": station_status,
         "monitored_stations": monitored_stations,
         "reporting_shortcuts": [code for code in ("CNLLY", "PERSE", "TARA", "HSTON", "GCDK")
-                                if code in configured and code in observed and observed[code].readings],
+                                if code in configured and code in observed
+                                and observed[code].current_readings],
         "any_stored_readings": bool(rows),
-        "has_station_metrics": any(row["readings"] or row["today_average"] is not None
+        "has_station_metrics": any(row["current_readings"] or row["today_average"] is not None
                                    for row in station_status),
         "highest_delay": highest_delay, "last_updated": last_updated,
         "age_minutes": max(0, int((now - last_updated).total_seconds() // 60))
@@ -224,7 +243,8 @@ def _context(station="", *, strict=False):
             "total": int(station in configured) if station else len(configured),
         },
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
-        "today_date": local_now.date().isoformat(), "cutoff": cutoff, "now": now,
+        "today_date": local_now.date().isoformat(), "current_cutoff": current_cutoff,
+        "now": now,
     }
     current = _train_summary(context, recent=True)
     context["network"].update(
@@ -239,7 +259,12 @@ def _latest_readings(context, *, recent=False):
     observations = _observations()
     query = db.select(*observations)
     if recent:
-        query = query.where(observations.fetched_at >= context["cutoff"])
+        station_fetches = _station_fetches(observations)
+        query = query.join(station_fetches, observations.station == station_fetches.c.station)
+        query = query.where(
+            observations.fetched_at == station_fetches.c.last_fetch,
+            observations.fetched_at >= context["current_cutoff"],
+        )
     else:
         query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
     if context["station"]:

@@ -1,5 +1,5 @@
 {% macro freshness(last_updated, age_minutes) %}
-{% if last_updated %}<p class="freshness"><time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago · Dublin time</time></p>{% endif %}
+{% if last_updated %}<p class="freshness"><time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %} · Dublin time</time></p>{% endif %}
 {% endmacro %}
 
 {% macro delay_badge(delay) %}
