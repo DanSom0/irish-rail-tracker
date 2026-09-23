@@ -1,14 +1,16 @@
 {% extends 'base.html' %}
-{% from 'components.html' import freshness, daily, services, station_filter, coverage_label, empty_state with context %}
+{% from 'components.html' import daily, services, station_filter, empty_state with context %}
 {% block content %}
 <div class="page-heading"><h1>Dublin rail services</h1><p>Check your station's latest services and reported delays.</p></div>
 <section class="station-start" aria-label="Choose your station">
-  {{ station_filter(stations, station or remembered_station, 'dashboard.stations', 'Find your station', 'View board', false) }}
-  {% if reporting_shortcuts or remembered_station %}<p class="shortcuts">{% for code in reporting_shortcuts %}<a href="{{ url_for('dashboard.station_detail', code=code) }}">{{ code|station_name }}</a>{% endfor %}
-  {% if remembered_station %}<a class="forget-station" href="{{ url_for('dashboard.forget_station') }}">Forget my station</a>{% endif %}</p>{% endif %}
+  <div class="station-picker-row">
+    {{ station_filter(stations, station or remembered_station, 'dashboard.stations', 'Find your station', 'View board', false) }}
+    {% if remembered_station %}<a class="forget-station" href="{{ url_for('dashboard.forget_station') }}">Forget my station</a>{% endif %}
+  </div>
+  {% if reporting_shortcuts %}<nav class="shortcuts" aria-label="Popular stations"><span>Popular stations</span>{% for code in reporting_shortcuts %}<a href="{{ url_for('dashboard.station_detail', code=code) }}">{{ code|station_name }}</a>{% endfor %}</nav>{% endif %}
 </section>
 <section class="network-card" aria-labelledby="network-heading">
-  <div class="section-heading"><h2 id="network-heading">Current services{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
+  <div class="section-heading"><h2 id="network-heading">Network right now{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
   {% if network.trains %}
   <dl class="network-metrics">
     <div><dt>On time</dt><dd><strong>{{ '%.0f%%'|format(network.on_time) }}</strong> <span class="sample">Based on {{ network.trains }} train{{ '' if network.trains == 1 else 's' }} · {% if network.total %}Across {{ network.total }} monitored station{{ '' if network.total == 1 else 's' }}{% else %}Not currently monitored{% endif %}</span></dd></div>
@@ -16,11 +18,10 @@
     <div><dt>6+ min late</dt><dd>{{ network.major }} <span class="unit">train{{ '' if network.major == 1 else 's' }}</span></dd></div>
   </dl>
   {% else %}{{ empty_state("Current punctuality is not available because there are no recent readings.") }}{% endif %}
-  {{ coverage_label(coverage) }}
-  {{ freshness(last_updated, age_minutes) }}
+  <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}</p>
 </section>
 {% if current_delays %}
-<section class="card" aria-labelledby="delays-heading">
+<section class="current-delays" aria-labelledby="delays-heading">
   <div class="section-heading"><h2 id="delays-heading">Largest current delays</h2><span>2+ minutes late</span></div>
   {{ services(current_delays, reading_details) }}
 </section>
