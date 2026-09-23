@@ -92,6 +92,9 @@ def test_dashboard_empty_state(client, dashboard_data):
     response = client.get("/")
     assert response.status_code == 200
     assert "Current punctuality is not available" in response.get_data(as_text=True)
+    assert "Current delays are unavailable until a monitored station returns fresh readings" in (
+        response.get_data(as_text=True)
+    )
     assert context["summary"].trains == 0
     assert context["summary"].on_time is None
     assert context["summary"].average_delay is None
@@ -491,7 +494,11 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     seed, _ = dashboard_data
     seed({})
     page = client.get("/").get_data(as_text=True)
+    assert page.index('class="station-start"') < page.index('<h1 id="home-heading">')
     assert page.index('Find your station') < page.index('Network right now')
+    assert 'class="intro-rail"' in page and 'aria-hidden="true" focusable="false"' in page
+    assert page.index('class="homepage-lower"') < page.index('class="current-delays"')
+    assert page.index('class="current-delays"') < page.index('class="daily"')
     for code in ("CNLLY", "PERSE", "HSTON", "TARA", "MHIDE"):
         assert f'<option value="{code}">{routes.STATION_NAMES[code]}</option>' in page
     assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
