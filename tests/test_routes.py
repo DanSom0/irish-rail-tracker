@@ -422,7 +422,11 @@ def test_latest_train_reading_drives_rows_and_all_averages(client, dashboard_dat
     assert [(reading.station, reading.delay_minutes)
             for reading in context["reading_details"][rows[1].id]] == [("TARA", 10), ("CNLLY", 40)]
     assert 'Reported at <a href="/stations/PERSE">Dublin Pearse</a>' in page
-    assert '<summary>Details</summary>' in page and '40 min late' in page
+    assert '<summary>Service details</summary>' in page and '40 min late' in page
+    reporting = page.index('Reported at <a href="/stations/PERSE">')
+    assert reporting < page.index(
+        '<details class="reading-details"><summary>Service details</summary>', reporting,
+    ) < page.index('Train SAME')
     assert context["network"]["readings"] == 3  # Station readings remain distinct from trains.
     assert context["network"]["trains"] == 2
     assert context["network"]["average_delay"] == 4
@@ -625,7 +629,28 @@ def test_early_trains_count_as_on_time_with_sample_size(client, dashboard_data):
     page = client.get("/").get_data(as_text=True)
     assert context["network"]["on_time"] == pytest.approx(200 / 3)
     assert context["summary"].on_time == pytest.approx(200 / 3)
-    assert "Based on 3 trains" in page
+    assert "Current figures: based on 3 trains" in page
+    assert "Today: based on 3 trains" in page
+
+
+def test_figure_explanations_are_disclosed_while_headlines_and_warnings_remain_visible(
+    client, dashboard_data, clock,
+):
+    seed, _ = dashboard_data
+    seed({"delay_minutes": 7, "fetched_at": clock.instant - timedelta(minutes=11)})
+    home = client.get("/").get_data(as_text=True)
+    before_details, explanation = home.split(
+        '<details class="figures-details"><summary>About these figures</summary>', 1,
+    )
+    assert "1/20 stations reporting" in before_details
+    assert "Updated 11 minutes ago" in before_details
+    assert "Limited coverage" in before_details and "Latest board stale" in before_details
+    assert "Coverage means" in explanation and "Today: based on 1 train" in explanation
+    assert "On time includes early trains" in explanation
+    assert home.count('<details class="figures-details">') == 1
+    assert '<dl class="daily-metrics">' in home and "Trains tracked" in home
+    station = client.get("/stations/CNLLY").get_data(as_text=True)
+    assert '<details class="figures-details"><summary>About these figures</summary>' in station
 
 
 @pytest.mark.parametrize("path", ["/", "/stations", "/routes", "/stations/CNLLY?view=delays"])
@@ -832,7 +857,7 @@ def test_monitored_scope_excludes_historical_stations_from_network(
     assert context["network"]["trains"] == 1
     assert [row.station for row in context["current_delays"]] == ["CNLLY"]
     assert "1/2 stations reporting" in page
-    assert "Across 2 monitored stations" in page
+    assert "across 2 monitored stations" in page
     assert '<a href="/stations/CNLLY">Dublin Connolly</a>' in page
     assert '<a href="/stations/GCDK">Grand Canal Dock</a>' not in page
     assert '<a href="/stations/TARA">Tara Street</a>' not in page
