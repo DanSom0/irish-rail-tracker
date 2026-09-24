@@ -10,16 +10,16 @@
 <p class="empty">{{ message }} {{ empty_reason }}{% if yesterday_url %} <a href="{{ yesterday_url }}">View yesterday</a>{% endif %}</p>
 {% endmacro %}
 
-{% macro daily(summary, today) %}
+{% macro daily(summary, today, show_details=true) %}
 <section class="daily" aria-labelledby="daily-heading">
   <div class="section-heading"><h2 id="daily-heading">Today's performance</h2><span>{{ today }}</span></div>
   {% if summary.trains %}
   <dl class="daily-metrics">
-    <div><dt>On time</dt><dd>{{ '%.0f%%'|format(summary.on_time) }} <span class="sample">Based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}</span></dd></div>
+    <div><dt>On time</dt><dd>{{ '%.0f%%'|format(summary.on_time) }}</dd></div>
     <div><dt>Average delay</dt><dd>{{ summary.average_delay|delay_text }}</dd></div>
     <div><dt>Trains tracked</dt><dd>{{ summary.trains }}</dd></div>
   </dl>
-  <p class="note">Latest reading per train. On time includes early trains and delays of up to 1 minute.</p>
+  {% if show_details %}<details class="figures-details"><summary>About these figures</summary><p>Based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}. On time includes early trains and delays of up to 1 minute. Today's figures count each train once using its latest stored reading for the day, even after it leaves the board.</p></details>{% endif %}
   {% else %}{{ empty_state("Today's performance is not yet available because no readings have been stored for today.") }}{% endif %}
 </section>
 {% endmacro %}
@@ -44,7 +44,7 @@
     <td class="service-time">{{ row.scheduled_time }}</td>
     <td class="expected-time{{ ' unchanged' if row.delay_minutes == 0 else '' }}">{% if expected_clock %}<time>{{ expected_clock }}</time>{% if day_offset %}<small>{{ '+' if day_offset > 0 else '−' }}{{ day_offset|abs }} day{{ '' if day_offset|abs == 1 else 's' }}</small>{% endif %}{% else %}—{% endif %}</td>
     <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if station %}<small>{{ row|service_kind }}</small>{% endif %}{% if not station %}<small>Reported at <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
-      <details class="reading-details"><summary>Details</summary>
+      <details class="reading-details"><summary>Service details</summary>
         <p>Train {{ row.train_code }}</p>
         <p>From {{ row.origin|place_name }} · {{ row.train_date }}</p>
         {{ freshness(row.fetched_at, row.fetched_at|minutes_ago) }}

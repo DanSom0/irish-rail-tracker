@@ -16,12 +16,19 @@
   <div class="section-heading"><h2 id="network-heading">Network right now{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
   {% if network.trains %}
   <dl class="network-metrics">
-    <div><dt>On time</dt><dd><strong>{{ '%.0f%%'|format(network.on_time) }}</strong> <span class="sample">Based on {{ network.trains }} train{{ '' if network.trains == 1 else 's' }} · {% if network.total %}Across {{ network.total }} monitored station{{ '' if network.total == 1 else 's' }}{% else %}Not currently monitored{% endif %}</span></dd></div>
+    <div><dt>On time</dt><dd><strong>{{ '%.0f%%'|format(network.on_time) }}</strong></dd></div>
     <div><dt>Average delay</dt><dd>{{ network.average_delay|delay_text }}</dd></div>
     <div><dt>6+ min late</dt><dd>{{ network.major }} <span class="unit">train{{ '' if network.major == 1 else 's' }}</span></dd></div>
   </dl>
   {% else %}{{ empty_state("Current punctuality is not available because there are no recent readings.") }}{% endif %}
-  <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}</p>
+  <div class="network-meta">
+    <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}{% if coverage.reporting < coverage.total %} · Limited coverage{% endif %}{% if not network.trains and last_updated and age_minutes >= 10 %} · Latest board stale{% endif %}</p>
+    <details class="figures-details"><summary>About these figures</summary>
+      <p>Current figures: based on {{ network.trains }} train{{ '' if network.trains == 1 else 's' }}{% if network.total %} across {{ network.total }} monitored station{{ '' if network.total == 1 else 's' }}{% else %}; the selected station is not currently monitored{% endif %}. Today: based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}.</p>
+      <p>Coverage means a monitored station has supplied a reading in the last 30 minutes. Current services use only each station's latest stored poll when it is at most 10 minutes old.</p>
+      <p>On time includes early trains and trains up to 1 minute late. Today's figures count each train once using its latest stored reading for the day, even after it leaves the board.</p>
+    </details>
+  </div>
 </section>
 <div class="homepage-lower">
 <section class="current-delays" aria-labelledby="delays-heading">
@@ -30,6 +37,6 @@
   {% elif network.trains %}<p class="no-delays">No significant delays in the latest readings · {{ 'limited coverage; only reporting stations are represented' if coverage.reporting < coverage.total else 'all monitored stations up to date' }}.</p>
   {% else %}<p class="no-delays">Current delays are unavailable until a monitored station returns fresh readings.</p>{% endif %}
 </section>
-{{ daily(summary, today) }}
+{{ daily(summary, today, false) }}
 </div>
 {% endblock %}
