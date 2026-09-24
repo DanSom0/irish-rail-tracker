@@ -79,6 +79,7 @@ jobs:
           echo "[deploy] Starting $IMAGE_TAG"
           docker compose --env-file .env -f docker-compose.prod.yml pull
           docker compose --env-file .env -f docker-compose.prod.yml up -d
+          ./scripts/pin-image-tag.sh "$IMAGE_TAG"
           ./scripts/install-cron.sh
           docker image prune -f
           REMOTE

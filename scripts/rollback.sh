@@ -15,5 +15,6 @@ if ! docker image inspect "ghcr.io/dansom0/irish-rail-tracker:$IMAGE_TAG" > /dev
   docker compose --env-file .env -f docker-compose.prod.yml pull web worker
 fi
 docker compose --env-file .env -f docker-compose.prod.yml up -d
+./scripts/pin-image-tag.sh "$IMAGE_TAG"
 ./scripts/healthcheck.sh http://localhost/health
 echo "[rollback] Healthy at $IMAGE_TAG"

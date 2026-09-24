@@ -36,7 +36,9 @@ CI runs on pull requests and pushes to `main`. It checks Python with Ruff, runs 
 
 After CI passes for a push to this repository's `main`, Deploy builds the tested commit. It publishes the image to GHCR with both its full commit SHA and `latest` as tags. Deploys run one at a time. You can also start Deploy manually on `main`.
 
-Deploy copies the production Compose file and scripts to the server. It downloads the SHA-tagged image, starts the services, and schedules backups. The public `/health` check retries for up to 60 seconds. If it does not return HTTP 200, the job fails. It does not roll back automatically.
+Deploy copies the production Compose file and scripts to the server. It downloads the SHA-tagged image, starts the services, records the full SHA as `IMAGE_TAG` in the server's `.env`, and schedules backups. Rollback records its selected SHA the same way. The public `/health` check retries for up to 60 seconds. If it does not return HTTP 200, the job fails. It does not roll back automatically, so `.env` still identifies the image running after `up -d`.
+
+To restart services or apply configuration changes, re-run the **Deploy** workflow on `main`. Never use a bare `docker compose up -d` on the server; the workflow selects and records the deployed image.
 
 Web and worker share one Python 3.12 image. The worker checks stations every five minutes by default. PostgreSQL keeps one row per station, train code, and train date, updating it on each reading.
 
@@ -49,7 +51,7 @@ cd /opt/irish-rail-tracker
 ./scripts/rollback.sh '<previous-full-commit-sha>'
 ```
 
-The script uses the saved image or downloads it, starts the services, and checks their health. If the image is not on the server and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents in place. The next successful deploy replaces that version.
+The script uses the saved image or downloads it, starts the services, records the selected SHA in `.env`, and checks their health. If the image is not on the server and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents in place. The next successful deploy replaces that version.
 
 ## Backups
 
@@ -119,6 +121,6 @@ Copy the settings from [`.env.production.example`](../.env.production.example) i
 | `IRISH_RAIL_API_URL` | Unset | Optional API address; defaults to `http://api.irishrail.ie/realtime/realtime.asmx/getStationDataByCodeXML`. |
 | `BACKUP_BUCKET` | Required | Terraform's backup bucket name. |
 | `AWS_REGION` | Required (`eu-west-1` here) | Backup bucket region. |
-| `IMAGE_TAG` | `latest` | Deploy and rollback use a full commit SHA instead. |
+| `IMAGE_TAG` | Managed by Deploy and rollback | Full SHA of the image started by Compose; do not set it in the initial `.env`. |
 
 Compose builds `DATABASE_URL` from the PostgreSQL settings. `WEB_PORT` is local-only (default `8000`); production publishes port `80`.
