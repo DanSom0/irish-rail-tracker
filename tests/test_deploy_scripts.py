@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def deployment(tmp_path, monkeypatch):
     shutil.copytree(ROOT / "scripts", tmp_path / "scripts")
     shutil.copy(ROOT / ".env.production.example", tmp_path / ".env")
+    with (tmp_path / ".env").open("a") as env:
+        env.write("IMAGE_TAG=latest\n")  # Older server configuration.
     (tmp_path / "bin").mkdir()
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:{os.environ['PATH']}")
     monkeypatch.setenv("CHECK_DIR", str(tmp_path))
@@ -113,6 +115,8 @@ if [[ $1 == image ]]; then exit {0 if cached else 1}; fi
     assert all(line.startswith(sha) for line in log.splitlines())
     assert ("pull web worker" in log) == (not cached)
     assert "up -d" in log
+    assert (deployment / ".env").read_text().count(f"IMAGE_TAG={sha}\n") == 1
+    assert "IMAGE_TAG=latest" not in (deployment / ".env").read_text()
 
 
 def test_rollback_rejects_invalid_tags_before_running_docker(deployment):
@@ -120,6 +124,17 @@ def test_rollback_rejects_invalid_tags_before_running_docker(deployment):
     for args in [(), ("latest",), ("a" * 40, "extra")]:
         assert run(deployment, "rollback.sh", *args).returncode != 0
     assert not (deployment / "called").exists()
+
+
+def test_pin_image_tag_on_first_deploy(deployment):
+    env = deployment / ".env"
+    env.write_text(env.read_text().replace("IMAGE_TAG=latest\n", ""))
+    sha = "b" * 40
+    result = run(deployment, "pin-image-tag.sh", sha)
+    assert result.returncode == 0, result.stderr
+    assert f"IMAGE_TAG={sha}\n" in env.read_text()
+    assert "POSTGRES_DB=replace_with_database_name" in env.read_text()
+    assert env.stat().st_mode & 0o777 == 0o600
 
 
 def test_healthcheck_retries_until_exactly_200(deployment):
@@ -144,3 +159,4 @@ def test_healthcheck_and_rollback_fail_when_never_healthy(deployment):
     result = run(deployment, "rollback.sh", "a" * 40)
     assert result.returncode != 0
     assert "endpoint did not return HTTP 200" in result.stderr
+    assert "IMAGE_TAG=" + "a" * 40 in (deployment / ".env").read_text()
