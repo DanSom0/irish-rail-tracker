@@ -19,8 +19,11 @@
     <button type="submit">Show station</button>
     <button type="button" id="map-reset" class="map-reset" hidden>Reset view</button>
   </form>
+  <label class="map-toggle" id="train-toggle" hidden><input type="checkbox" id="map-show-trains" checked> Show trains on map</label>
   <p class="freshness" id="map-freshness">Showing station updates from the last 10 minutes{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% endif %}</p>
   <p class="map-error" id="map-error" role="status" hidden>Couldn't refresh — showing earlier readings.</p>
+  <p class="freshness" id="train-freshness" hidden></p>
+  <p class="map-error" id="train-error" role="status" hidden></p>
   <div class="map-enhancement" id="map-enhancement" hidden>
     <div id="network-map" role="img" aria-label="Map of monitored Dublin rail stations. Use the station selector or list below for keyboard access."></div>
     <section class="map-panel" id="map-panel" aria-labelledby="map-panel-title" hidden>
@@ -34,7 +37,15 @@
     <li><i class="map-dot map-minor" aria-hidden="true"></i> Minor delay (&gt;1 to &lt;6 min)</li>
     <li><i class="map-dot map-significant" aria-hidden="true"></i> Significant delay (≥6 min)</li>
     <li><i class="map-dot map-no-data" aria-hidden="true"></i> No recent data</li>
+    <li id="train-legend" hidden><span class="train-marker train-legend-icon" aria-hidden="true"><svg class="train-glyph" viewBox="0 0 16 16"><use href="#train-glyph"></use></svg></span> Train (last reported position)</li>
   </ul>
+  <p class="note" id="train-note" hidden>Irish Rail reports each running train at the last station it passed, so train icons sit just below that station and don't move between stations.</p>
+  <svg class="visually-hidden" aria-hidden="true" focusable="false"><symbol id="train-glyph" viewBox="0 0 16 16"><rect class="train-glyph-body" x="3" y="1" width="10" height="11" rx="2.5"></rect><rect class="train-glyph-cut" x="4.75" y="3" width="6.5" height="3.75" rx=".75"></rect><circle class="train-glyph-cut" cx="5.9" cy="9.4" r=".95"></circle><circle class="train-glyph-cut" cx="10.1" cy="9.4" r=".95"></circle><path class="train-glyph-rail" d="M5.5 12.5 4 15M10.5 12.5l1.5 2.5"></path></symbol></svg>
+</section>
+<section class="train-list-section" id="train-list-section" aria-labelledby="train-list-heading" hidden>
+  <div class="section-heading"><h2 id="train-list-heading">Trains on the network</h2><span id="train-count"></span></div>
+  <p class="freshness" id="train-list-status"></p>
+  <ul class="train-list" id="train-list"></ul>
 </section>
 <section class="map-list-section" aria-labelledby="map-list-heading">
   <div class="section-heading"><h2 id="map-list-heading">Station list</h2></div>
