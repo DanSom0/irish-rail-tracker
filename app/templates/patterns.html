@@ -1,34 +1,40 @@
 {% extends 'base.html' %}
 {% from 'components.html' import station_filter with context %}
 {% block content %}
-<div class="page-heading"><p class="eyebrow">Historical readings</p><h1>When are delays worst?</h1>
-  <p>{% if first_date %}Scheduled dates {{ first_date.day }} {{ first_date.strftime('%b %Y') }}{% if last_date != first_date %} – {{ last_date.day }} {{ last_date.strftime('%b %Y') }}{% endif %} · {% endif %}Service hours 05:00–23:59, Dublin time.</p>
+<div class="page-heading"><h1>Delays by day and hour</h1>
+  {% if first_date %}<p>Data from {{ first_date.day }}{% if last_date != first_date %}{% if first_date.month == last_date.month and first_date.year == last_date.year %}–{{ last_date.day }}{% else %} {{ first_date.strftime('%B %Y') }} – {{ last_date.day }}{% endif %}{% endif %} {{ last_date.strftime('%B %Y') }}</p>{% endif %}
 </div>
-{{ station_filter(stations, station, 'dashboard.delay_patterns', 'Station', 'Show patterns') }}
+<div class="patterns-filter">{{ station_filter(stations, station, 'dashboard.delay_patterns', 'Station', 'Show patterns', historical_label='Historical data only') }}</div>
+<p id="patterns-selection-notice" role="status" hidden></p>
 <section class="patterns" aria-labelledby="patterns-heading">
-  <div class="section-heading"><h2 id="patterns-heading">Average delay by scheduled day and hour{% if station %} · {{ station|station_name }}{% endif %}</h2></div>
-  <p class="patterns-summary">{% if worst %}Worst: {{ days[worst.weekday - 1] }} {{ '%02d'|format(worst.hour) }}:00–{{ '%02d'|format(worst.hour + 1) }}:00, average {{ '%g'|format(worst.average_delay|round(1)|float) }} min {{ 'late' if worst.average_delay else 'delay' }} ({{ worst.readings }} readings){% else %}Not enough data yet. This fills in as more days are collected.{% endif %}</p>
+  <div class="section-heading"><h2 id="patterns-heading">{{ station|station_name if station else 'All monitored stations' }}{% if station and station not in monitored_stations %} · Historical data only{% endif %}</h2></div>
+  <p class="patterns-summary">{% if worst %}Highest average in this period: {{ days[worst.weekday - 1] }} {{ '%02d'|format(worst.hour) }}:00–{{ '%02d'|format(worst.hour + 1) }}:00, {{ '%g'|format(worst.average_delay|round(1)|float) }} min ({{ worst.readings }} readings){% else %}Not enough data yet. This fills in as more days are collected.{% endif %}</p>
+  <p class="note">Average delay in minutes. Some hours have too little data to compare.</p>
   <div class="heatmap-scroll" role="region" aria-label="Delay patterns heatmap" tabindex="0">
-    <svg class="heatmap" viewBox="0 0 1072 392" width="1072" height="392" aria-hidden="true" focusable="false">
+    <svg class="heatmap" viewBox="0 0 1072 420" width="1072" height="420" aria-hidden="true" focusable="false">
       <defs><pattern id="sparse-hatch" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" class="heat-sparse-base"/><path d="M-2 2 2 -2 M0 8 8 0 M6 10 10 6" class="heat-sparse-line"/></pattern></defs>
       <text class="heat-axis" x="0" y="31">Day</text>
       {% for hour in hours %}<text class="heat-axis heat-hour" x="{{ 96 + loop.index0 * 52 }}" y="31">{{ '%02d'|format(hour) }}</text>{% endfor %}
       {% for day in days %}{% set weekday = loop.index %}{% set y = 52 + loop.index0 * 48 %}
         <text class="heat-axis" x="0" y="{{ y + 25 }}">{{ day[:3] }}</text>
+        {% if weekday not in days_with_data %}<text class="heat-axis heat-no-data" x="72" y="{{ y + 25 }}">No data collected</text>{% else %}
         {% for hour in hours %}{% set cell = cells.get((weekday, hour)) %}{% set x = 72 + loop.index0 * 52 %}
           {% if not cell %}{% set level = 'empty' %}{% elif cell.readings < 10 %}{% set level = 'sparse' %}{% elif cell.average_delay < 2 %}{% set level = '0' %}{% elif cell.average_delay < 5 %}{% set level = '1' %}{% elif cell.average_delay < 10 %}{% set level = '2' %}{% else %}{% set level = '3' %}{% endif %}
           <rect class="heat-cell heat-{{ level }}" x="{{ x }}" y="{{ y }}" width="48" height="40" rx="2"><title>{{ day }} {{ '%02d'|format(hour) }}:00–{{ '%02d'|format(hour + 1) }}:00 · {% if cell %}Average {{ '%.1f'|format(cell.average_delay|float) }} min delay · {{ cell.readings }} readings{% if cell.readings < 10 %} · Not enough data yet{% endif %}{% else %}No readings · 0 readings · average unavailable{% endif %}</title></rect>
           {% if cell and cell.readings >= 10 %}<text class="heat-number heat-number-{{ level }}" x="{{ x + 24 }}" y="{{ y + 25 }}">{{ '%.1f'|format(cell.average_delay|float) }}</text>{% endif %}
         {% endfor %}
+        {% endif %}
       {% endfor %}
+      <text class="heat-axis heat-hour" x="540" y="410">Scheduled time</text>
     </svg>
   </div>
-  <div class="heat-legend" aria-label="Fixed average delay colour scale">
-    <span><i class="heat-0"></i>0–&lt;2 min</span><span><i class="heat-1"></i>2–&lt;5 min</span><span><i class="heat-2"></i>5–&lt;10 min</span><span><i class="heat-3"></i>10+ min</span><span><i class="heat-sparse"></i>1–9 readings · Not enough data yet</span><span><i class="heat-empty"></i>No readings</span>
+  <div class="heat-legend" aria-label="Average delay colour scale">
+    <span><i class="heat-0"></i>Under 2 min</span><span><i class="heat-1"></i>2–5 min</span><span><i class="heat-2"></i>5–10 min</span><span><i class="heat-3"></i>10+ min</span><span><i class="heat-sparse"></i>Too little data</span><span><i class="heat-empty"></i>No data</span>
   </div>
+  <details class="figures-details patterns-figures"><summary>About these figures</summary><p>Colours use average delay: under 2 min, 2 to under 5 min, 5 to under 10 min, and 10+ min. A cell needs at least 10 readings to be compared; 1–9 readings show as too little data. Times are scheduled Europe/Dublin service hours, 05:00–23:59. Early trains count as 0 min delay.</p></details>
   <div class="visually-hidden"><table><caption>Delay patterns by scheduled Dublin day and hour</caption><thead><tr><th scope="col">Day</th><th scope="col">Scheduled hour</th><th scope="col">Average delay</th><th scope="col">Readings</th><th scope="col">Data state</th></tr></thead><tbody>
-    {% for day in days %}{% set weekday = loop.index %}{% for hour in hours %}{% set cell = cells.get((weekday, hour)) %}<tr><th scope="row">{{ day }}</th><td>{{ '%02d'|format(hour) }}:00–{{ '%02d'|format(hour + 1) }}:00</td><td>{{ '%.1f min'|format(cell.average_delay|float) if cell else 'Unavailable' }}</td><td>{{ cell.readings if cell else 0 }} readings</td><td>{{ 'No readings' if not cell else 'Not enough data yet' if cell.readings < 10 else 'Enough readings' }}</td></tr>{% endfor %}{% endfor %}
+    {% for day in days %}{% set weekday = loop.index %}{% for hour in hours %}{% set cell = cells.get((weekday, hour)) %}<tr><th scope="row">{{ day }}</th><td>{{ '%02d'|format(hour) }}:00–{{ '%02d'|format(hour + 1) }}:00</td><td>{{ '%.1f min'|format(cell.average_delay|float) if cell else 'Unavailable' }}</td><td>{{ cell.readings if cell else 0 }} readings</td><td>{{ 'No data' if not cell else 'Too little data' if cell.readings < 10 else 'Enough readings' }}</td></tr>{% endfor %}{% endfor %}
   </tbody></table></div>
-  <p class="patterns-method">Each reading represents one train at one station, using its latest stored observation. Earlier updates are overwritten.</p>
 </section>
+<script>document.querySelector('#station').addEventListener('change', event => { document.querySelector('.patterns').hidden = true; const notice = document.querySelector('#patterns-selection-notice'); notice.textContent = 'Loading patterns for ' + event.target.selectedOptions[0].textContent + '…'; notice.hidden = false; event.target.form.requestSubmit(); });</script>
 {% endblock %}

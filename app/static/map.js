@@ -67,30 +67,35 @@
   function summary(parent, station) {
     append(parent, 'span', 'map-status', station.status);
     append(parent, 'p', '', station.average_reported_delay === null ? 'No recent data' :
-      `Average reported delay ${delayText(station.average_reported_delay)} · ${station.current_trains.length} current train${station.current_trains.length === 1 ? '' : 's'}`);
+      `Average delay: ${station.average_reported_delay.toFixed(1)} min`);
+    append(parent, 'p', 'map-trains-count', `${station.current_trains.length} train${station.current_trains.length === 1 ? '' : 's'}`);
     const updated = append(parent, 'p', 'freshness');
     time(updated, station.latest_observation_at);
   }
   function trains(parent, station) {
     if (!station.current_trains.length) {
-      append(parent, 'p', 'empty', 'No trains in the latest stored station poll seen in the last 10 minutes.');
+      append(parent, 'p', 'empty', 'No recent trains at this station.');
     } else {
-      const scroll = append(parent, 'div', 'table-scroll');
-      const table = append(scroll, 'table');
-      const head = append(table, 'thead');
-      const header = append(head, 'tr');
-      for (const label of ['Scheduled', 'Expected', 'Destination', 'Status']) append(header, 'th', '', label);
-      const body = append(table, 'tbody');
-      for (const train of station.current_trains) {
-        const row = append(body, 'tr');
-        append(row, 'td', 'numeric', train.scheduled);
-        const expected = append(row, 'td', 'numeric' + (train.expected === train.scheduled && !train.expected_day_offset ? ' unchanged' : ''), train.expected || '—');
-        if (train.expected_day_offset) append(expected, 'small', '', ` ${train.expected_day_offset > 0 ? '+' : ''}${train.expected_day_offset} day`);
-        append(row, 'th', '', train.destination).scope = 'row';
-        const state = append(row, 'td', '', delayText(train.delay));
-        const reading = append(state, 'small', 'map-reading', `${train.train_code} · From ${train.origin} · `);
-        const stamp = append(reading, 'time', '', localTime(train.reading_at));
-        stamp.dateTime = train.reading_at;
+      for (const [direction, heading] of [['arrival', 'Arrivals'], ['departure', 'Departures']]) {
+        const group = station.current_trains.filter(train => train.direction === direction);
+        if (!group.length) continue;
+        const section = append(parent, 'section', 'map-service-group');
+        append(section, 'h3', '', heading);
+        const rows = append(section, 'ul', 'map-services');
+        for (const train of group) {
+          const row = append(rows, 'li', 'map-service');
+          const main = append(row, 'div', 'map-service-main');
+          append(main, 'strong', '', direction === 'arrival' ? `Arriving from ${train.origin}` : `Departing to ${train.destination}`);
+          append(main, 'span', '', `Expected ${train.expected || '—'}${train.expected_day_offset ? ` (${train.expected_day_offset > 0 ? '+' : ''}${train.expected_day_offset} day)` : ''}`);
+          append(main, 'span', 'map-service-delay' + (train.delay >= 6 ? ' badge major' : ''), delayText(train.delay));
+          const reading = append(row, 'small', 'map-reading', `${train.train_code} · ${train.origin} → ${train.destination} · `);
+          const serviceDate = append(reading, 'time', '', train.train_date);
+          serviceDate.dateTime = train.train_date;
+          reading.append(` · Scheduled ${train.scheduled} · `);
+          const stamp = append(reading, 'time', '', age(train.reading_at));
+          stamp.dateTime = train.reading_at;
+          stamp.title = localTime(train.reading_at);
+        }
       }
     }
     const link = append(parent, 'a', 'map-station-link', `View ${station.name} station page →`);
@@ -125,6 +130,19 @@
     const points = stations.filter(item => item.lat !== null && item.lon !== null).map(item => [item.lat, item.lon]);
     if (points.length) map.fitBounds(points, { padding: [24, 24] });
   }
+  function updateLabels() {
+    const shown = [];
+    for (const marker of markers.values()) {
+      const label = marker.getTooltip().getElement();
+      if (!label) continue;
+      label.hidden = map.getZoom() < 12;
+      if (label.hidden) continue;
+      const box = label.getBoundingClientRect();
+      label.hidden = shown.some(other => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top);
+      if (!label.hidden) shown.push(box);
+    }
+  }
+  map.on('zoomend moveend', updateLabels);
   resetButton.addEventListener('click', () => { fit(); close(); });
   function render(data) {
     const open = new Set([...list.querySelectorAll('details[open]')].map(item => item.id));
@@ -134,10 +152,12 @@
     list.replaceChildren();
     for (const station of stations) {
       if (station.lat !== null && station.lon !== null) {
-        const icon = node('div', 'map-marker');
+        const empty = station.average_reported_delay === null;
+        const icon = node('div', 'map-marker' + (empty ? ' map-marker-empty' : ''));
         append(icon, 'i', 'map-dot ' + statusClass(station.status));
-        append(icon, 'span', 'map-train-count', String(station.current_trains.length));
-        const marker = L.marker([station.lat, station.lon], { icon: L.divIcon({ html: icon, className: '', iconSize: [38, 28] }), keyboard: false });
+        if (!empty) append(icon, 'span', 'map-marker-delay', `${station.average_reported_delay.toFixed(1)} min`);
+        const marker = L.marker([station.lat, station.lon], { icon: L.divIcon({ html: icon, className: '', iconSize: empty ? [24, 24] : [82, 28] }), keyboard: false, zIndexOffset: empty ? 0 : 1000 });
+        marker.bindTooltip(station.name, { permanent: true, direction: 'top', offset: [0, -10], className: 'map-station-label' });
         marker.addTo(map).on('click', () => { const element = marker.getElement(); element.tabIndex = -1; show(station, element); });
         markers.set(station.code, marker);
       }
@@ -149,14 +169,20 @@
       append(name, 'i', 'map-dot ' + statusClass(station.status));
       append(name, 'span', '', station.name);
       append(label, 'span', '', station.status);
-      append(label, 'span', '', station.average_reported_delay === null ? 'No recent data' : `Average reported delay ${delayText(station.average_reported_delay)}`);
+      append(label, 'span', '', station.average_reported_delay === null ? 'No recent data' : `Average delay: ${station.average_reported_delay.toFixed(1)} min`);
       time(append(label, 'span'), station.latest_observation_at);
+      const cue = append(label, 'span', 'map-view-cue');
+      append(cue, 'span', '', '⌄').setAttribute('aria-hidden', 'true');
+      cue.append(' View trains');
       trains(detail, station);
     }
     const newest = stations.map(item => item.latest_observation_at).filter(Boolean).sort().at(-1);
     freshness.replaceChildren();
-    time(freshness, newest);
+    freshness.append('Showing station updates from the last 10 minutes');
+    if (newest) freshness.append(' · ');
+    if (newest) time(freshness, newest);
     if (!map._loaded) fit();
+    requestAnimationFrame(updateLabels);
     if (initialSelection) {
       const selected = stations.find(item => item.code === initialSelection);
       initialSelection = '';

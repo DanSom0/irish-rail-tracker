@@ -265,25 +265,42 @@ def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
     assert [train["train_code"] for train in data["BRAY"]["current_trains"]] == ["PRESENT"]
     assert [train["train_code"] for train in data["HOWTH"]["current_trains"]] == ["BOUNDARY"]
     train = data["CNLLY"]["current_trains"][0]
-    assert set(train) == {"train_code", "origin", "destination", "scheduled", "expected",
-                          "expected_day_offset", "delay", "reading_at"}
+    assert set(train) == {"train_code", "train_date", "origin", "destination", "direction",
+                          "scheduled", "expected", "expected_day_offset", "delay", "reading_at"}
     assert train["expected"] == "09:06"
     assert train["reading_at"] == clock.instant.isoformat()
     assert client.get("/").status_code == 200  # Daily statistics retain stale readings.
 
 
-def test_live_map_renders_complete_list_without_javascript(client, dashboard_data):
+def test_live_map_renders_complete_list_without_javascript(client, dashboard_data, app, monkeypatch):
     seed, _ = dashboard_data
-    seed({"station": "CNLLY", "train_code": "BOARD", "delay_minutes": 7})
+    monkeypatch.setitem(app.config, "STATION_CODES", ("CNLLY", "TARA"))
+    seed(
+        {"station": "CNLLY", "train_code": "ARRIVE", "origin": "Portlaoise",
+         "destination": "Dublin Connolly", "delay_minutes": 7},
+        {"station": "CNLLY", "train_code": "DEPART", "origin": "Dublin Connolly",
+         "destination": "Cork", "delay_minutes": 2},
+    )
     page = client.get("/map").get_data(as_text=True)
-    assert "Live network" in page and "Live map" in page
-    assert 'id="map-station-list"' in page and "BOARD" in page
-    assert "Average reported delay" in page and "No recent data" in page
+    assert "Live station delays" in page
+    assert "Tracking 2 Dublin-area stations." in page
+    assert "Showing station updates from the last 10 minutes" in page
+    assert 'id="map-station-list"' in page and "ARRIVE" in page and "DEPART" in page
+    assert "Average delay: 4.5 min" in page and "No recent data" in page
+    assert "Arrivals" in page and "Arriving from Portlaoise" in page
+    assert "Departures" in page and "Departing to Cork" in page
+    assert 'class="map-service-delay badge major">7 min late' in page
+    assert "View trains" in page and "Complete without the map" not in page
     assert "View Dublin Connolly station page" in page
     assert 'src="/static/map.js"' in page
     assert "© OpenStreetMap contributors" in page
     assert 'id="station-CNLLY"' in client.get("/map?station=CNLLY").get_data(as_text=True)
     assert client.get("/map?station=BOGUS").status_code == 404
+    trains = next(station["current_trains"] for station in client.get("/api/network").get_json()["stations"]
+                  if station["code"] == "CNLLY")
+    assert {train["train_code"]: train["direction"] for train in trains} == {
+        "ARRIVE": "arrival", "DEPART": "departure",
+    }
 
 
 def test_live_map_assets_cover_monitored_stations(app):
@@ -982,7 +999,7 @@ def test_patterns_bucket_scheduled_dublin_day_across_october_dst_and_midnight(
     assert (context["first_date"].isoformat(), context["last_date"].isoformat()) == (
         "2026-10-25", "2026-10-26",
     )
-    assert "Scheduled dates 25 Oct 2026 – 26 Oct 2026" in page
+    assert "Data from 25–26 October 2026" in page
     assert "Sunday 23:00–24:00" in page and "Monday 05:00–06:00" in page
 
 
@@ -1000,7 +1017,7 @@ def test_patterns_exclude_missing_invalid_and_out_of_service_hours(client, dashb
     assert sum(cell.readings for cell in context["cells"].values()) == 1
     assert context["first_date"] == context["last_date"]
     assert context["first_date"].isoformat() == "2026-10-25"
-    assert "Scheduled dates 25 Oct 2026" in page
+    assert "Data from 25 October 2026" in page
     assert "24 Oct 2026" not in page and "26 Oct 2026" not in page
 
 
@@ -1034,10 +1051,14 @@ def test_patterns_thresholds_and_worst_ignore_sparse_cells(client, dashboard_dat
     assert context["cells"][(5, 17)].readings == 9
     assert context["cells"][(2, 5)].readings == 10
     assert (context["worst"].weekday, context["worst"].hour) == (2, 5)
-    assert "Worst: Tuesday 05:00–06:00, average 6 min late (10 readings)" in page
+    assert "Data from 22–25 September 2026" in page
+    assert "Highest average in this period: Tuesday 05:00–06:00, 6 min (10 readings)" in page
     assert page.count('class="heat-cell heat-sparse"') == 1
-    assert page.count('class="heat-cell heat-empty"') == 131
-    assert "Not enough data yet" in page and "No readings · 0 readings" in page
+    assert page.count('class="heat-cell heat-empty"') == 36
+    assert page.count("No data collected") == 5
+    assert all(label in page for label in ("Under 2 min", "2–5 min", "5–10 min", "10+ min", "Too little data", "No data"))
+    assert "Some hours have too little data to compare." in page
+    assert "Scheduled time" in page and "Average delay in minutes" in page
     assert '<div class="visually-hidden"><table>' in page
 
 
@@ -1045,7 +1066,7 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
     seed, context = dashboard_data
     empty = client.get("/patterns").get_data(as_text=True)
     assert context["first_date"] is None and context["last_date"] is None
-    assert "Scheduled dates" not in empty
+    assert "Data from" not in empty
     assert "Not enough data yet. This fills in as more days are collected." in empty
     assert 'aria-current="page">Delay patterns' in empty
     seed(
@@ -1053,14 +1074,20 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
         {"station": "ARHAN", "train_code": "HISTORICAL", "train_date": "2026-09-21",
          "delay_minutes": 9},
     )
-    client.get("/patterns")
+    all_page = client.get("/patterns").get_data(as_text=True)
     assert context["cells"][(2, 9)].readings == 1
     assert context["first_date"].isoformat() == "2026-09-22"
     assert context["station"] == ""
-    client.get("/patterns?station=ARHAN")
+    assert "All monitored stations" in all_page
+    assert 'value="ARHAN">Ardrahan · Historical data only</option>' in all_page
+    historical_page = client.get("/patterns?station=ARHAN").get_data(as_text=True)
     assert context["station"] == "ARHAN"
     assert context["cells"][(1, 9)].average_delay == 9
     assert context["first_date"].isoformat() == "2026-09-21"
+    assert "Historical data only" in historical_page
+    assert "Data from 21 September 2026" in historical_page
+    assert "Earlier updates are overwritten." not in historical_page
+    assert "Earlier updates are overwritten." in client.get("/about/data").get_data(as_text=True)
     client.get("/patterns?station=INVALID")
     assert context["station"] == ""  # Existing query-filter behaviour: reset to all monitored.
     assert context["cells"][(2, 9)].readings == 1

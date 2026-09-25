@@ -201,8 +201,10 @@ def _network_stations(now):
         expected, day_offset = expected_time(row)
         by_station[row.station].append({
             "train_code": row.train_code,
+            "train_date": row.train_date,
             "origin": place_name(row.origin),
             "destination": place_name(row.destination),
+            "direction": "arrival" if service_kind(row) == "Terminates here" else "departure",
             "scheduled": row.scheduled_time,
             "expected": expected,
             "expected_day_offset": day_offset,
@@ -497,8 +499,8 @@ def delay_patterns():
     worst = max((row for row in rows if row.readings >= 10),
                 key=lambda row: row.average_delay, default=None)
     return render_template(
-        "patterns.html", title="When are delays worst?", active="patterns", **context,
-        cells=cells, worst=worst,
+        "patterns.html", title="Delays by day and hour", active="patterns", **context,
+        cells=cells, worst=worst, days_with_data={row.weekday for row in rows},
         first_date=rows[0].first_date if rows else None,
         last_date=rows[0].last_date if rows else None,
         days=("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
@@ -518,7 +520,7 @@ def live_map():
     if selected and selected not in context["monitored_stations"]:
         abort(404)
     return render_template(
-        "map.html", title="Live network", active="map", **context,
+        "map.html", title="Live station delays", active="map", **context,
         map_stations=_network_stations(context["now"]), map_selected=selected,
     )
 
