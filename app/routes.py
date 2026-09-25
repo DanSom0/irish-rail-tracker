@@ -13,7 +13,7 @@ from flask import (
     request,
     url_for,
 )
-from sqlalchemy import DateTime, case, cast, func, text, tuple_
+from sqlalchemy import Date, DateTime, Integer, case, cast, func, text, tuple_
 
 from app.extensions import db
 from app.models import Observation
@@ -398,6 +398,45 @@ def route_averages():
     return render_template(
         "routes.html", title="Route performance", active="routes", **context,
         pagination=_paginate(query), day=day,
+    )
+
+
+def _delay_patterns_query(station, monitored_stations):
+    """Aggregate latest train–station readings by scheduled Dublin wall time."""
+    observations = _observations()
+    valid_time = observations.scheduled_time.op("~")(r"^(0[5-9]|1[0-9]|2[0-3]):[0-5][0-9]$")
+    scheduled = cast(observations.train_date + " " + observations.scheduled_time, DateTime)
+    weekday = cast(func.extract("isodow", scheduled), Integer)
+    hour = cast(func.extract("hour", scheduled), Integer)
+    scheduled_date = cast(scheduled, Date)
+    scope = [station] if station else monitored_stations
+    return db.select(
+        weekday.label("weekday"), hour.label("hour"),
+        func.count().label("readings"),
+        func.avg(func.greatest(observations.delay_minutes, 0)).label("average_delay"),
+        func.min(func.min(scheduled_date)).over().label("first_date"),
+        func.max(func.max(scheduled_date)).over().label("last_date"),
+    ).where(observations.station.in_(scope), valid_time).group_by(weekday, hour).order_by(
+        weekday, hour,
+    )
+
+
+@dashboard.get("/patterns")
+def delay_patterns():
+    context = _context(request.args.get("station", ""))
+    rows = db.session.execute(_delay_patterns_query(
+        context["station"], context["monitored_stations"],
+    )).all()
+    cells = {(row.weekday, row.hour): row for row in rows}
+    worst = max((row for row in rows if row.readings >= 10),
+                key=lambda row: row.average_delay, default=None)
+    return render_template(
+        "patterns.html", title="When are delays worst?", active="patterns", **context,
+        cells=cells, worst=worst,
+        first_date=rows[0].first_date if rows else None,
+        last_date=rows[0].last_date if rows else None,
+        days=("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
+        hours=range(5, 24),
     )
 
 
