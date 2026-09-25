@@ -1,6 +1,8 @@
 """Tests for current train positions: parsing, bounds, caching and the API route."""
 
 import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -51,6 +53,32 @@ def upstream(monkeypatch):
     get = Mock(return_value=_response())
     monkeypatch.setattr("app.train_positions.requests.get", get)
     return get
+
+
+@pytest.fixture
+def hanging_upstream():
+    """A local feed that serves the fixture until told to hang, then never answers."""
+    state = {"hang": False}
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if state["hang"]:
+                release.wait(10)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(FEED_XML)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}/getCurrentTrainsXML", state
+    release.set()
+    server.shutdown()
+    server.server_close()
 
 
 @pytest.fixture
@@ -250,6 +278,30 @@ def test_api_treats_empty_response_as_failure(client, upstream, fresh_cache):
     upstream.return_value = _response(b"  \n")
 
     assert client.get("/api/trains").get_json()["status"] == "error"
+
+
+def test_api_uses_trains_timeout_rather_than_station_timeout(app, client, upstream, fresh_cache):
+    """The web request uses its own short upstream timeout, not the worker's."""
+    client.get("/api/trains")
+
+    assert app.config["TRAINS_REQUEST_TIMEOUT_SECONDS"] == 3
+    assert app.config["REQUEST_TIMEOUT_SECONDS"] != 3
+    assert upstream.call_args.kwargs["timeout"] == 3
+
+
+def test_api_returns_stale_quickly_when_upstream_hangs(app, client, fresh_cache, clock, hanging_upstream, monkeypatch):
+    """A feed that stops answering times out and serves the cached trains within the timeout."""
+    url, state = hanging_upstream
+    monkeypatch.setitem(app.config, "IRISH_RAIL_TRAINS_API_URL", url)
+    monkeypatch.setitem(app.config, "TRAINS_REQUEST_TIMEOUT_SECONDS", 0.2)
+    first = client.get("/api/trains").get_json()
+    state["hang"] = True
+    clock.now += TRAIN_CACHE_SECONDS
+    started = time.monotonic()
+    body = client.get("/api/trains").get_json()
+
+    assert time.monotonic() - started < 1
+    assert (body["status"], body["trains"]) == ("stale", first["trains"])
 
 
 def test_api_reports_error_when_no_station_has_coordinates(app, client, upstream, fresh_cache, monkeypatch, caplog):
