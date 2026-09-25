@@ -13,3 +13,6 @@ infra/tfplan
 .DS_Store
 .agents/
 skills-lock.json
+node_modules/
+tests/browser/shots/
+tests/browser/mode
