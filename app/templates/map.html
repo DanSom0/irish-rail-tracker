@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block refresh %}{% endblock %}
+{% block head %}
+<noscript><meta http-equiv="refresh" content="60"></noscript>
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<script defer src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script defer src="{{ url_for('static', filename='map.js') }}"></script>
+{% endblock %}
+{% block content %}
+<div class="page-heading"><h1>Live network</h1><p>Where are delays happening right now? Latest stored station poll, seen in the last 10 minutes.</p></div>
+<section class="live-map-section" aria-labelledby="map-heading">
+  <div class="section-heading"><h2 id="map-heading">Monitored stations</h2><p>Average reported delay · early trains count as 0</p></div>
+  <form class="station-filter map-filter" action="{{ url_for('dashboard.live_map') }}" method="get" id="map-station-form">
+    <label for="map-station">Choose station</label>
+    <select id="map-station" name="station">
+      <option value="">Select a station</option>
+      {% for code in monitored_stations %}<option value="{{ code }}"{% if code == map_selected %} selected{% endif %}>{{ code|station_name }}</option>{% endfor %}
+    </select>
+    <button type="submit">Show station</button>
+    <button type="button" id="map-reset" class="map-reset" hidden>Reset view</button>
+  </form>
+  <p class="freshness" id="map-freshness">{% if last_updated %}<time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% else %}No recent observations{% endif %}</p>
+  <p class="map-error" id="map-error" role="status" hidden>Couldn't refresh — showing earlier readings.</p>
+  <div class="map-enhancement" id="map-enhancement" hidden>
+    <div id="network-map" role="img" aria-label="Map of monitored Dublin rail stations. Use the station selector or list below for keyboard access."></div>
+    <section class="map-panel" id="map-panel" aria-labelledby="map-panel-title" hidden>
+      <button class="map-panel-close" id="map-panel-close" type="button" aria-label="Close station details">Close</button>
+      <div id="map-panel-content"></div>
+    </section>
+  </div>
+  <p class="map-credits">Railway geometry © OpenStreetMap contributors (ODbL). Map tiles © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
+  <ul class="map-legend" aria-label="Station status legend">
+    <li><i class="map-dot map-on-time" aria-hidden="true"></i> On time (≤1 min)</li>
+    <li><i class="map-dot map-minor" aria-hidden="true"></i> Minor delay (&gt;1 to &lt;6 min)</li>
+    <li><i class="map-dot map-significant" aria-hidden="true"></i> Significant delay (≥6 min)</li>
+    <li><i class="map-dot map-no-data" aria-hidden="true"></i> No recent data</li>
+  </ul>
+</section>
+<section class="map-list-section" aria-labelledby="map-list-heading">
+  <div class="section-heading"><h2 id="map-list-heading">Station list</h2><p>Complete without the map</p></div>
+  <div id="map-station-list">
+    {% for item in map_stations %}
+    <details class="map-list-item" id="station-{{ item.code }}"{% if item.code == map_selected %} open{% endif %}>
+      <summary><span class="map-list-name"><i class="map-dot map-{{ item.status|replace(' ', '-') }}" aria-hidden="true"></i>{{ item.name }}</span><span>{{ item.status|capitalize }}</span><span>{% if item.average_reported_delay is not none %}Average reported delay {{ item.average_reported_delay|round(1)|delay_text }}{% else %}No recent data{% endif %}</span><span>{% if item.latest_observation_at %}<time datetime="{{ item.latest_observation_at }}" title="{{ item.latest_observation_at|observation_title }}" class="observation-time">{{ item.latest_observation_at|observation_age }}</time>{% else %}No observations yet{% endif %}</span></summary>
+      {% if item.current_trains %}
+      <div class="table-scroll"><table><thead><tr><th class="numeric">Scheduled</th><th class="numeric">Expected</th><th>Destination</th><th>Status</th></tr></thead><tbody>
+        {% for train in item.current_trains %}<tr><td class="numeric">{{ train.scheduled }}</td><td class="numeric{{ ' unchanged' if train.scheduled == train.expected and train.expected_day_offset == 0 else '' }}">{{ train.expected or '—' }}{% if train.expected_day_offset %} <small>{% if train.expected_day_offset > 0 %}+{% endif %}{{ train.expected_day_offset }} day</small>{% endif %}</td><th scope="row">{{ train.destination }}</th><td>{{ train.delay|delay_text }}<small class="map-reading">{{ train.train_code }} · From {{ train.origin }} · <time datetime="{{ train.reading_at }}">{{ train.reading_at }}</time></small></td></tr>{% endfor %}
+      </tbody></table></div>
+      {% else %}<p class="empty">No trains in the latest stored station poll seen in the last 10 minutes.</p>{% endif %}
+      <p class="map-station-link"><a href="{{ url_for('dashboard.station_detail', code=item.code) }}">View {{ item.name }} station page →</a></p>
+    </details>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
