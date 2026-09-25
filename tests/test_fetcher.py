@@ -19,6 +19,13 @@ def test_parse_station_data_supports_default_xml_namespace():
     assert len(_observations()) == 2
 
 
+def test_parse_station_data_supports_responses_without_namespace():
+    """Rows are still found when the response has no default namespace."""
+    rows = parse_station_data((FIXTURES / "station_data_plain.xml").read_bytes(), "CNLLY")
+
+    assert [row["train_code"] for row in rows] == ["E101"]
+
+
 def test_parse_station_data_strips_traincode_whitespace():
     """Train codes are normalised before they become deduplication keys."""
     assert _observations()[0]["train_code"] == "A123"
