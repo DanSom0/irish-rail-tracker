@@ -20,6 +20,7 @@ from app.models import Observation
 from app.stations import (
     PLACE_NAMES,
     STATION_ALIASES,
+    STATION_COORDINATES,
     STATION_NAMES,
     canonical_station,
     station_codes,
@@ -69,6 +70,16 @@ def age_text(minutes):
             count = minutes // duration
             return f"{count} {unit}{'' if count == 1 else 's'}"
     return f"{minutes} minute{'' if minutes == 1 else 's'}"
+
+
+@dashboard.app_template_filter("observation_age")
+def observation_age(value):
+    return f"Updated {age_text(minutes_ago(datetime.fromisoformat(value)))} ago"
+
+
+@dashboard.app_template_filter("observation_title")
+def observation_title(value):
+    return dublin_time(datetime.fromisoformat(value))
 
 
 @dashboard.app_template_filter("expected_time")
@@ -159,6 +170,64 @@ def _station_fetches(observations):
     ).group_by(observations.station).subquery()
 
 
+def _current_station_poll(observations, station_fetches, cutoff):
+    """Latest stored poll for the station, seen within the rolling 10-minute window."""
+    return (observations.fetched_at == station_fetches.c.last_fetch) & (
+        observations.fetched_at >= cutoff
+    )
+
+
+def _current_station_rows(monitored_stations, now):
+    """Latest stored station poll, if seen in the last 10 minutes."""
+    observations = _observations()
+    station_fetches = _station_fetches(observations)
+    rows = db.session.execute(db.select(*observations).join(
+        station_fetches, observations.station == station_fetches.c.station,
+    ).where(
+        observations.station.in_(monitored_stations),
+        _current_station_poll(observations, station_fetches, now - CURRENT_WINDOW),
+    ).order_by(observations.station, observations.scheduled_time, observations.train_code)).all()
+    latest = dict(db.session.execute(db.select(
+        station_fetches.c.station, station_fetches.c.last_fetch,
+    ).where(station_fetches.c.station.in_(monitored_stations))).all())
+    return rows, latest
+
+
+def _network_stations(now):
+    monitored = station_codes(current_app.config["STATION_CODES"])
+    rows, latest = _current_station_rows(monitored, now)
+    by_station = {code: [] for code in monitored}
+    for row in rows:
+        expected, day_offset = expected_time(row)
+        by_station[row.station].append({
+            "train_code": row.train_code,
+            "origin": place_name(row.origin),
+            "destination": place_name(row.destination),
+            "scheduled": row.scheduled_time,
+            "expected": expected,
+            "expected_day_offset": day_offset,
+            "delay": row.delay_minutes,
+            "reading_at": row.fetched_at.isoformat(),
+        })
+    stations = []
+    for code in monitored:
+        trains = by_station[code]
+        average = sum(max(0, train["delay"]) for train in trains) / len(trains) if trains else None
+        status = ("no recent data" if average is None else "on time" if average <= 1
+                  else "minor delay" if average < 6 else "significant delay")
+        coordinates = STATION_COORDINATES.get(code)
+        stations.append({
+            "code": code, "name": station_name(code),
+            "lat": coordinates[0] if coordinates else None,
+            "lon": coordinates[1] if coordinates else None,
+            "status": status,
+            "average_reported_delay": average,
+            "latest_observation_at": latest[code].isoformat() if code in latest else None,
+            "current_trains": trains,
+        })
+    return stations
+
+
 def _context(station="", *, strict=False):
     """One grouped query supplies station coverage and current network figures."""
     station = canonical_station(station)
@@ -169,9 +238,7 @@ def _context(station="", *, strict=False):
     current_cutoff = now - CURRENT_WINDOW
     recent = observations.fetched_at.between(cutoff, now)
     station_fetches = _station_fetches(observations)
-    current = (observations.fetched_at == station_fetches.c.last_fetch) & (
-        observations.fetched_at >= current_cutoff
-    )
+    current = _current_station_poll(observations, station_fetches, current_cutoff)
     yesterday = local_now.date() - timedelta(days=1)
     today = observations.train_date == local_now.date().isoformat()
     rows = db.session.execute(db.select(
@@ -261,10 +328,9 @@ def _latest_readings(context, *, recent=False):
     if recent:
         station_fetches = _station_fetches(observations)
         query = query.join(station_fetches, observations.station == station_fetches.c.station)
-        query = query.where(
-            observations.fetched_at == station_fetches.c.last_fetch,
-            observations.fetched_at >= context["current_cutoff"],
-        )
+        query = query.where(_current_station_poll(
+            observations, station_fetches, context["current_cutoff"],
+        ))
     else:
         query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
     if context["station"]:
@@ -437,6 +503,23 @@ def delay_patterns():
         last_date=rows[0].last_date if rows else None,
         days=("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
         hours=range(5, 24),
+    )
+
+
+@dashboard.get("/api/network")
+def network_api():
+    return jsonify(stations=_network_stations(datetime.now(UTC)))
+
+
+@dashboard.get("/map")
+def live_map():
+    context = _context()
+    selected = canonical_station(request.args.get("station", ""))
+    if selected and selected not in context["monitored_stations"]:
+        abort(404)
+    return render_template(
+        "map.html", title="Live network", active="map", **context,
+        map_stations=_network_stations(context["now"]), map_selected=selected,
     )
 
 
