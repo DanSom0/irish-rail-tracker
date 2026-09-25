@@ -1,6 +1,8 @@
 """Tests for application HTTP routes and dashboard calculations."""
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import routes
 from app.extensions import db
 from app.models import Observation
+from app.stations import STATION_COORDINATES
 
 
 @pytest.fixture
@@ -215,6 +218,99 @@ def test_latest_station_board_expires_after_ten_minutes(client, dashboard_data, 
     assert context["reporting_shortcuts"] == ["TARA"]
     client.get("/stations/CNLLY?view=delays")
     assert context["pagination"]["total"] == 0
+
+
+def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
+    app, client, dashboard_data, clock, monkeypatch,
+):
+    seed, _ = dashboard_data
+    codes = ("CNLLY", "TARA", "HSTON", "PERSE", "GCDK", "BRAY", "HOWTH", "LDWNE")
+    monkeypatch.setitem(app.config, "STATION_CODES", codes)
+    seed(
+        {"station": "CNLLY", "train_code": "EARLY", "delay_minutes": -4},
+        {"station": "CNLLY", "train_code": "LATE", "delay_minutes": 2},
+        {"station": "TARA", "train_code": "ONE", "delay_minutes": 1},
+        {"station": "TARA", "train_code": "TWO", "delay_minutes": 2},
+        {"station": "HSTON", "train_code": "FIVE", "delay_minutes": 5},
+        {"station": "HSTON", "train_code": "SIX", "delay_minutes": 6},
+        {"station": "PERSE", "train_code": "EXACT", "delay_minutes": 6},
+        {"station": "GCDK", "train_code": "STALE", "delay_minutes": 9,
+         "fetched_at": clock.instant - timedelta(minutes=10, seconds=1)},
+        {"station": "BRAY", "train_code": "LEFT", "delay_minutes": 9,
+         "fetched_at": clock.instant - timedelta(minutes=7)},
+        {"station": "BRAY", "train_code": "PRESENT", "delay_minutes": 0},
+        {"station": "HOWTH", "train_code": "BOUNDARY", "delay_minutes": 1,
+         "fetched_at": clock.instant - timedelta(minutes=10)},
+    )
+    response = client.get("/api/network")
+    assert response.status_code == 200
+    data = {item["code"]: item for item in response.get_json()["stations"]}
+    assert set(data) == set(codes)
+    assert set(data["CNLLY"]) == {
+        "code", "name", "lat", "lon", "status", "average_reported_delay",
+        "latest_observation_at", "current_trains",
+    }
+    assert data["CNLLY"]["average_reported_delay"] == 1  # Early reading counts as zero.
+    assert data["CNLLY"]["status"] == "on time"
+    assert {code: data[code]["average_reported_delay"] for code in ("TARA", "HSTON", "PERSE")} == {
+        "TARA": 1.5, "HSTON": 5.5, "PERSE": 6,
+    }
+    assert [data[code]["status"] for code in ("TARA", "HSTON", "PERSE")] == [
+        "minor delay", "minor delay", "significant delay",
+    ]
+    assert data["GCDK"]["status"] == data["LDWNE"]["status"] == "no recent data"
+    assert data["GCDK"]["current_trains"] == []
+    assert data["GCDK"]["latest_observation_at"] is not None
+    assert data["LDWNE"]["latest_observation_at"] is None
+    assert [train["train_code"] for train in data["BRAY"]["current_trains"]] == ["PRESENT"]
+    assert [train["train_code"] for train in data["HOWTH"]["current_trains"]] == ["BOUNDARY"]
+    train = data["CNLLY"]["current_trains"][0]
+    assert set(train) == {"train_code", "origin", "destination", "scheduled", "expected",
+                          "expected_day_offset", "delay", "reading_at"}
+    assert train["expected"] == "09:06"
+    assert train["reading_at"] == clock.instant.isoformat()
+    assert client.get("/").status_code == 200  # Daily statistics retain stale readings.
+
+
+def test_live_map_renders_complete_list_without_javascript(client, dashboard_data):
+    seed, _ = dashboard_data
+    seed({"station": "CNLLY", "train_code": "BOARD", "delay_minutes": 7})
+    page = client.get("/map").get_data(as_text=True)
+    assert "Live network" in page and "Live map" in page
+    assert 'id="map-station-list"' in page and "BOARD" in page
+    assert "Average reported delay" in page and "No recent data" in page
+    assert "View Dublin Connolly station page" in page
+    assert 'src="/static/map.js"' in page
+    assert "© OpenStreetMap contributors" in page
+    assert 'id="station-CNLLY"' in client.get("/map?station=CNLLY").get_data(as_text=True)
+    assert client.get("/map?station=BOGUS").status_code == 404
+
+
+def test_live_map_assets_cover_monitored_stations(app):
+    assert all(code in STATION_COORDINATES for code in app.config["STATION_CODES"])
+    geometry = Path("app/static/rail-lines.geojson")
+    assert geometry.stat().st_size < 300_000
+    features = json.loads(geometry.read_text())["features"]
+    assert features and {line for feature in features for line in feature["properties"]["lines"]} == {
+        "DART", "Northern", "Maynooth", "Kildare",
+    }
+    provenance = Path("app/static/rail-lines.README.md").read_text()
+    assert "25 September 2026" in provenance and "ODbL" in provenance
+    assert Path("app/static/vendor/leaflet/LICENSE").exists()
+    assert Path("app/static/vendor/leaflet/leaflet.js").exists()
+    assert "1.9.4" in Path("app/static/vendor/leaflet/README.md").read_text()
+
+
+def test_live_network_expected_times_cross_midnight(client, dashboard_data):
+    seed, _ = dashboard_data
+    seed(
+        {"train_code": "LATE", "scheduled_time": "23:58", "delay_minutes": 5},
+        {"train_code": "EARLY", "scheduled_time": "00:01", "delay_minutes": -2},
+    )
+    trains = {row["train_code"]: row for station in client.get("/api/network").get_json()["stations"]
+              if station["code"] == "CNLLY" for row in station["current_trains"]}
+    assert (trains["LATE"]["expected"], trains["LATE"]["expected_day_offset"]) == ("00:03", 1)
+    assert (trains["EARLY"]["expected"], trains["EARLY"]["expected_day_offset"]) == ("23:59", -1)
 
 
 @pytest.mark.parametrize("instant,expected", [
