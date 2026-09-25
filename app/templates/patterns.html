@@ -4,7 +4,7 @@
 <div class="page-heading"><h1>Delays by day and hour</h1>
   {% if first_date %}<p>Data from {{ first_date.day }}{% if last_date != first_date %}{% if first_date.month == last_date.month and first_date.year == last_date.year %}–{{ last_date.day }}{% else %} {{ first_date.strftime('%B %Y') }} – {{ last_date.day }}{% endif %}{% endif %} {{ last_date.strftime('%B %Y') }}</p>{% endif %}
 </div>
-{{ station_filter(stations, station, 'dashboard.delay_patterns', 'Station', 'Show patterns', historical_label='Historical data only') }}
+<div class="patterns-filter">{{ station_filter(stations, station, 'dashboard.delay_patterns', 'Station', 'Show patterns', historical_label='Historical data only') }}</div>
 <p id="patterns-selection-notice" role="status" hidden></p>
 <section class="patterns" aria-labelledby="patterns-heading">
   <div class="section-heading"><h2 id="patterns-heading">{{ station|station_name if station else 'All monitored stations' }}{% if station and station not in monitored_stations %} · Historical data only{% endif %}</h2></div>

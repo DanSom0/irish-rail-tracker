@@ -201,8 +201,10 @@ def _network_stations(now):
         expected, day_offset = expected_time(row)
         by_station[row.station].append({
             "train_code": row.train_code,
+            "train_date": row.train_date,
             "origin": place_name(row.origin),
             "destination": place_name(row.destination),
+            "direction": "arrival" if service_kind(row) == "Terminates here" else "departure",
             "scheduled": row.scheduled_time,
             "expected": expected,
             "expected_day_offset": day_offset,
@@ -518,7 +520,7 @@ def live_map():
     if selected and selected not in context["monitored_stations"]:
         abort(404)
     return render_template(
-        "map.html", title="Live network", active="map", **context,
+        "map.html", title="Live station delays", active="map", **context,
         map_stations=_network_stations(context["now"]), map_selected=selected,
     )
 

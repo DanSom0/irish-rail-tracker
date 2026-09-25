@@ -7,9 +7,9 @@
 <script defer src="{{ url_for('static', filename='map.js') }}"></script>
 {% endblock %}
 {% block content %}
-<div class="page-heading"><h1>Live network</h1><p>Where are delays happening right now? Latest stored station poll, seen in the last 10 minutes.</p></div>
+<div class="page-heading"><h1>Live station delays</h1><p>Tracking {{ monitored_stations|length }} Dublin-area stations.</p></div>
 <section class="live-map-section" aria-labelledby="map-heading">
-  <div class="section-heading"><h2 id="map-heading">Monitored stations</h2><p>Average reported delay · early trains count as 0</p></div>
+  <div class="section-heading"><h2 id="map-heading">Monitored stations</h2></div>
   <form class="station-filter map-filter" action="{{ url_for('dashboard.live_map') }}" method="get" id="map-station-form">
     <label for="map-station">Choose station</label>
     <select id="map-station" name="station">
@@ -19,7 +19,7 @@
     <button type="submit">Show station</button>
     <button type="button" id="map-reset" class="map-reset" hidden>Reset view</button>
   </form>
-  <p class="freshness" id="map-freshness">{% if last_updated %}<time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% else %}No recent observations{% endif %}</p>
+  <p class="freshness" id="map-freshness">Showing station updates from the last 10 minutes{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% endif %}</p>
   <p class="map-error" id="map-error" role="status" hidden>Couldn't refresh — showing earlier readings.</p>
   <div class="map-enhancement" id="map-enhancement" hidden>
     <div id="network-map" role="img" aria-label="Map of monitored Dublin rail stations. Use the station selector or list below for keyboard access."></div>
@@ -37,16 +37,19 @@
   </ul>
 </section>
 <section class="map-list-section" aria-labelledby="map-list-heading">
-  <div class="section-heading"><h2 id="map-list-heading">Station list</h2><p>Complete without the map</p></div>
+  <div class="section-heading"><h2 id="map-list-heading">Station list</h2></div>
   <div id="map-station-list">
     {% for item in map_stations %}
     <details class="map-list-item" id="station-{{ item.code }}"{% if item.code == map_selected %} open{% endif %}>
-      <summary><span class="map-list-name"><i class="map-dot map-{{ item.status|replace(' ', '-') }}" aria-hidden="true"></i>{{ item.name }}</span><span>{{ item.status|capitalize }}</span><span>{% if item.average_reported_delay is not none %}Average reported delay {{ item.average_reported_delay|round(1)|delay_text }}{% else %}No recent data{% endif %}</span><span>{% if item.latest_observation_at %}<time datetime="{{ item.latest_observation_at }}" title="{{ item.latest_observation_at|observation_title }}" class="observation-time">{{ item.latest_observation_at|observation_age }}</time>{% else %}No observations yet{% endif %}</span></summary>
+      <summary><span class="map-list-name"><i class="map-dot map-{{ item.status|replace(' ', '-') }}" aria-hidden="true"></i>{{ item.name }}</span><span>{{ item.status|capitalize }}</span><span>{% if item.average_reported_delay is not none %}Average delay: {{ '%.1f'|format(item.average_reported_delay) }} min{% else %}No recent data{% endif %}</span><span>{% if item.latest_observation_at %}<time datetime="{{ item.latest_observation_at }}" title="{{ item.latest_observation_at|observation_title }}" class="observation-time">{{ item.latest_observation_at|observation_age }}</time>{% else %}No observations yet{% endif %}</span><span class="map-view-cue"><span aria-hidden="true">⌄</span> View trains</span></summary>
       {% if item.current_trains %}
-      <div class="table-scroll"><table><thead><tr><th class="numeric">Scheduled</th><th class="numeric">Expected</th><th>Destination</th><th>Status</th></tr></thead><tbody>
-        {% for train in item.current_trains %}<tr><td class="numeric">{{ train.scheduled }}</td><td class="numeric{{ ' unchanged' if train.scheduled == train.expected and train.expected_day_offset == 0 else '' }}">{{ train.expected or '—' }}{% if train.expected_day_offset %} <small>{% if train.expected_day_offset > 0 %}+{% endif %}{{ train.expected_day_offset }} day</small>{% endif %}</td><th scope="row">{{ train.destination }}</th><td>{{ train.delay|delay_text }}<small class="map-reading">{{ train.train_code }} · From {{ train.origin }} · <time datetime="{{ train.reading_at }}">{{ train.reading_at }}</time></small></td></tr>{% endfor %}
-      </tbody></table></div>
-      {% else %}<p class="empty">No trains in the latest stored station poll seen in the last 10 minutes.</p>{% endif %}
+      {% for direction, heading in [('arrival', 'Arrivals'), ('departure', 'Departures')] %}
+      {% set grouped = item.current_trains|selectattr('direction', 'equalto', direction)|list %}
+      {% if grouped %}<section class="map-service-group"><h3>{{ heading }}</h3><ul class="map-services">
+        {% for train in grouped %}<li class="map-service"><div class="map-service-main"><strong>{{ 'Arriving from ' ~ train.origin if direction == 'arrival' else 'Departing to ' ~ train.destination }}</strong><span>Expected {{ train.expected or '—' }}{% if train.expected_day_offset %} ({{ '+' if train.expected_day_offset > 0 else '' }}{{ train.expected_day_offset }} day){% endif %}</span><span class="map-service-delay{{ ' badge major' if train.delay >= 6 else '' }}">{{ train.delay|delay_text }}</span></div><small class="map-reading">{{ train.train_code }} · {{ train.origin }} → {{ train.destination }} · <time datetime="{{ train.train_date }}">{{ train.train_date }}</time> · Scheduled {{ train.scheduled }} · <time datetime="{{ train.reading_at }}" title="{{ train.reading_at|observation_title }}">{{ train.reading_at|observation_age }}</time></small></li>{% endfor %}
+      </ul></section>{% endif %}
+      {% endfor %}
+      {% else %}<p class="empty">No recent trains at this station.</p>{% endif %}
       <p class="map-station-link"><a href="{{ url_for('dashboard.station_detail', code=item.code) }}">View {{ item.name }} station page →</a></p>
     </details>
     {% endfor %}

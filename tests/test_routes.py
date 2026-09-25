@@ -265,25 +265,42 @@ def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
     assert [train["train_code"] for train in data["BRAY"]["current_trains"]] == ["PRESENT"]
     assert [train["train_code"] for train in data["HOWTH"]["current_trains"]] == ["BOUNDARY"]
     train = data["CNLLY"]["current_trains"][0]
-    assert set(train) == {"train_code", "origin", "destination", "scheduled", "expected",
-                          "expected_day_offset", "delay", "reading_at"}
+    assert set(train) == {"train_code", "train_date", "origin", "destination", "direction",
+                          "scheduled", "expected", "expected_day_offset", "delay", "reading_at"}
     assert train["expected"] == "09:06"
     assert train["reading_at"] == clock.instant.isoformat()
     assert client.get("/").status_code == 200  # Daily statistics retain stale readings.
 
 
-def test_live_map_renders_complete_list_without_javascript(client, dashboard_data):
+def test_live_map_renders_complete_list_without_javascript(client, dashboard_data, app, monkeypatch):
     seed, _ = dashboard_data
-    seed({"station": "CNLLY", "train_code": "BOARD", "delay_minutes": 7})
+    monkeypatch.setitem(app.config, "STATION_CODES", ("CNLLY", "TARA"))
+    seed(
+        {"station": "CNLLY", "train_code": "ARRIVE", "origin": "Portlaoise",
+         "destination": "Dublin Connolly", "delay_minutes": 7},
+        {"station": "CNLLY", "train_code": "DEPART", "origin": "Dublin Connolly",
+         "destination": "Cork", "delay_minutes": 2},
+    )
     page = client.get("/map").get_data(as_text=True)
-    assert "Live network" in page and "Live map" in page
-    assert 'id="map-station-list"' in page and "BOARD" in page
-    assert "Average reported delay" in page and "No recent data" in page
+    assert "Live station delays" in page
+    assert "Tracking 2 Dublin-area stations." in page
+    assert "Showing station updates from the last 10 minutes" in page
+    assert 'id="map-station-list"' in page and "ARRIVE" in page and "DEPART" in page
+    assert "Average delay: 4.5 min" in page and "No recent data" in page
+    assert "Arrivals" in page and "Arriving from Portlaoise" in page
+    assert "Departures" in page and "Departing to Cork" in page
+    assert 'class="map-service-delay badge major">7 min late' in page
+    assert "View trains" in page and "Complete without the map" not in page
     assert "View Dublin Connolly station page" in page
     assert 'src="/static/map.js"' in page
     assert "© OpenStreetMap contributors" in page
     assert 'id="station-CNLLY"' in client.get("/map?station=CNLLY").get_data(as_text=True)
     assert client.get("/map?station=BOGUS").status_code == 404
+    trains = next(station["current_trains"] for station in client.get("/api/network").get_json()["stations"]
+                  if station["code"] == "CNLLY")
+    assert {train["train_code"]: train["direction"] for train in trains} == {
+        "ARRIVE": "arrival", "DEPART": "departure",
+    }
 
 
 def test_live_map_assets_cover_monitored_stations(app):
