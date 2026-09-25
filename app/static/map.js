@@ -32,6 +32,8 @@
   let trains = [];
   let trainsFetchedAt = null;
   let trainState = 'loading';
+  // The last copy of each train and the fetch it came from, so a panel can say when a train left the feed.
+  const lastSeen = new Map();
   // What the panel shows ({ type: 'station' | 'train' | 'group', ... }) and how to refocus its opener.
   let view = null;
   let opener = null;
@@ -140,39 +142,59 @@
     parent.append(svg);
   }
   function messageLines(train) { return train.public_message ? train.public_message.split('\n') : []; }
-  function positionLabel(parent) {
+  function positionLabel(parent, fetchedAt = trainsFetchedAt) {
     parent.append('Last reported position · data fetched ');
-    stamp(parent, trainsFetchedAt, ago(trainsFetchedAt));
+    stamp(parent, fetchedAt, ago(fetchedAt));
   }
+  function currentTrain(code) { return trains.find(item => item.train_code === code); }
+  function plural(count) { return `${count} train${count === 1 ? '' : 's'}`; }
   function destination(parent, train, className) {
     // The live feed has no destination field; only show one when the feed provides it.
     if ('destination' in train) append(parent, 'p', className, train.destination ? `To ${train.destination}` : 'Destination unavailable');
   }
-  function trainDetails(parent, train, group) {
+  function trainDetails(parent, code, group) {
+    // A train missing from the latest data keeps its last details, labelled with the fetch it last appeared in.
+    const current = currentTrain(code);
+    const { train, fetchedAt } = current ? { train: current, fetchedAt: trainsFetchedAt } : lastSeen.get(code);
     if (group) {
-      const back = append(parent, 'button', 'map-panel-back', `← All ${group.trains.length} trains here`);
+      const remaining = group.filter(currentTrain).length;
+      const back = append(parent, 'button', 'map-panel-back', remaining ? `← All ${plural(remaining)} here` : '← Back to train list');
       back.type = 'button';
-      back.addEventListener('click', () => { renderPanel({ type: 'group', group }); focusGroupItem(train.train_code); });
+      back.addEventListener('click', () => { renderPanel({ type: 'group', codes: group }); focusGroupItem(code); });
     }
-    append(parent, 'h2', '', `Train ${train.train_code}`).id = 'map-panel-title';
+    append(parent, 'h2', '', `Train ${code}`).id = 'map-panel-title';
+    if (!current) append(parent, 'p', 'train-gone', 'No longer in the latest train data.');
     if (train.direction) append(parent, 'p', 'train-direction', train.direction);
     destination(parent, train, 'train-destination');
     const lines = messageLines(train);
     append(parent, 'p', 'train-message', lines.length ? lines.join('\n') : 'No message from Irish Rail.');
-    positionLabel(append(parent, 'p', 'train-position'));
+    positionLabel(append(parent, 'p', 'train-position'), fetchedAt);
   }
-  function groupDetails(parent, group) {
-    append(parent, 'h2', '', `${group.trains.length} trains`).id = 'map-panel-title';
+  function groupDetails(parent, codes) {
+    // Membership is rebuilt from the latest data on every render; trains that left are named, not offered.
+    const current = codes.map(currentTrain).filter(Boolean);
+    const gone = codes.filter(code => !currentTrain(code));
+    if (!current.length) {
+      append(parent, 'h2', '', 'Trains no longer reported').id = 'map-panel-title';
+      append(parent, 'p', 'train-gone', 'These trains are no longer reported.');
+      append(parent, 'p', 'note', `Last seen: ${gone.join(', ')}.`);
+      const back = append(parent, 'button', 'map-panel-back', 'Back to map');
+      back.type = 'button';
+      back.addEventListener('click', close);
+      return;
+    }
+    append(parent, 'h2', '', plural(current.length)).id = 'map-panel-title';
     append(parent, 'p', 'note', 'Reported at the same place at this zoom level. Choose a train for details.');
     const items = append(parent, 'ul', 'train-choices');
-    for (const train of group.trains) {
+    for (const train of current) {
       const choice = append(append(items, 'li'), 'button', 'train-choice');
       choice.type = 'button';
       choice.dataset.code = train.train_code;
       append(choice, 'strong', '', train.train_code);
       append(choice, 'span', '', [train.direction, messageLines(train).at(-1)].filter(Boolean).join(' · '));
-      choice.addEventListener('click', () => { renderPanel({ type: 'train', code: train.train_code, group }); closeButton.focus(); });
+      choice.addEventListener('click', () => { renderPanel({ type: 'train', code: train.train_code, group: codes }); closeButton.focus(); });
     }
+    if (gone.length) append(parent, 'p', 'train-gone', `No longer in the latest train data: ${gone.join(', ')}.`);
     positionLabel(append(parent, 'p', 'train-position'));
   }
   function focusGroupItem(code) {
@@ -190,12 +212,10 @@
       stationTrains(panelContent, station);
       closeButton.setAttribute('aria-label', 'Close station details');
     } else if (view.type === 'train') {
-      const train = trains.find(item => item.train_code === view.code) || view.train;
-      view.train = train;
-      trainDetails(panelContent, train, view.group);
+      trainDetails(panelContent, view.code, view.group);
       closeButton.setAttribute('aria-label', 'Close train details');
     } else {
-      groupDetails(panelContent, view.group);
+      groupDetails(panelContent, view.codes);
       closeButton.setAttribute('aria-label', 'Close train list');
     }
     panel.hidden = false;
@@ -363,7 +383,7 @@
         ? `Train ${codes[0]}${group.trains[0].direction ? `, ${group.trains[0].direction}` : ''}`
         : `${codes.length} trains: ${codes.join(', ')}`);
       for (const code of codes) trainMarkerElements.set(code, element);
-      const select = () => open(single ? { type: 'train', code: codes[0] } : { type: 'group', group },
+      const select = () => open(single ? { type: 'train', code: codes[0] } : { type: 'group', codes },
         element, { kind: 'marker', code: codes[0] });
       marker.on('click', select);
       activate(element, select);
@@ -416,6 +436,7 @@
   function showTrains(data) {
     trains = [...data.trains].sort((a, b) => a.train_code.localeCompare(b.train_code));
     trainsFetchedAt = data.fetched_at;
+    for (const train of trains) lastSeen.set(train.train_code, { train, fetchedAt: trainsFetchedAt });
     renderTrainMarkers();
     renderTrainList();
   }

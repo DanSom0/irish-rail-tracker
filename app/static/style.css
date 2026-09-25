@@ -333,6 +333,7 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .train-destination { font-weight: 650; }
 .train-message { white-space: pre-line; font-size: 16px; line-height: 1.45; }
 .train-position { color: var(--muted); font-size: 13px; }
+.train-gone { padding: 4px var(--space-1); background: var(--minor-bg); color: var(--minor); border-radius: 3px; font-size: 14px; font-weight: 650; }
 .train-choices { list-style: none; margin: var(--space-2) 0; padding: 0; }
 .train-choice { display: grid; gap: 2px; width: 100%; min-height: 44px; margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); background: var(--surface); color: inherit; border: 1px solid var(--line); border-left: 4px solid var(--train); text-align: left; font-weight: 400; }
 .train-choice strong { font-weight: 700; }
