@@ -25,7 +25,7 @@ from app.stations import (
     canonical_station,
     station_codes,
 )
-from app.train_positions import cache as train_positions_cache, trains_in_bounds
+from app.train_positions import current_trains
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
@@ -516,13 +516,11 @@ def network_api():
 
 @dashboard.get("/api/trains")
 def trains_api():
-    result = train_positions_cache.get(
+    return jsonify(current_trains(
         current_app.config["IRISH_RAIL_TRAINS_API_URL"],
         current_app.config["REQUEST_TIMEOUT_SECONDS"],
-    )
-    return jsonify({**result, "trains": trains_in_bounds(
-        result["trains"], current_app.config["STATION_CODES"],
-    )})
+        current_app.config["STATION_CODES"],
+    ))
 
 
 @dashboard.get("/map")
