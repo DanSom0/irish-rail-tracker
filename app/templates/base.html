@@ -16,7 +16,7 @@
       <a class="brand" href="{{ url_for('dashboard.index') }}"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path d="M10 3 6 29M22 3l4 26M9 7h14M8 15h16M7 23h18" fill="none" stroke="currentColor" stroke-width="2.5"/></svg><span>Irish Rail <span class="wordmark-light">Delay Tracker</span></span></a>
     </div>
     <nav class="shell primary-nav" aria-label="Main navigation">
-      {% for key, label, endpoint in [('overview', 'Overview', 'dashboard.index'), ('stations', 'Stations', 'dashboard.stations'), ('routes', 'Route performance', 'dashboard.route_averages')] %}
+      {% for key, label, endpoint in [('overview', 'Overview', 'dashboard.index'), ('stations', 'Stations', 'dashboard.stations'), ('routes', 'Route performance', 'dashboard.route_averages'), ('patterns', 'Delay patterns', 'dashboard.delay_patterns')] %}
       <a href="{{ url_for(endpoint) }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
       <a class="data-health{{ ' limited' if coverage.reporting < coverage.total else '' }}" href="{{ url_for('dashboard.status') }}"{% if active == 'status' %} aria-current="page"{% endif %}>● {{ 'Limited coverage' if coverage.reporting < coverage.total else 'Data up to date' }}</a>
