@@ -864,3 +864,107 @@ def test_monitored_scope_excludes_historical_stations_from_network(
     assert '<option value="GCDK">Grand Canal Dock · Not currently monitored</option>' in page
     for path in ("/stations", "/status", "/stations/GCDK"):
         assert "Not currently monitored" in client.get(path).get_data(as_text=True)
+
+
+def test_patterns_bucket_scheduled_dublin_day_across_october_dst_and_midnight(
+    client, dashboard_data, clock,
+):
+    seed, context = dashboard_data
+    clock.instant = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    seed(
+        {"train_code": "SUNDAY", "train_date": "2026-10-25", "scheduled_time": "23:59",
+         "delay_minutes": 4},
+        {"train_code": "MONDAY", "train_date": "2026-10-26", "scheduled_time": "05:00",
+         "delay_minutes": 8},
+        {"train_code": "DST", "train_date": "2026-10-25", "scheduled_time": "05:00",
+         "delay_minutes": 2},
+    )
+    page = client.get("/patterns").get_data(as_text=True)
+    assert context["cells"][(7, 23)].readings == 1
+    assert context["cells"][(1, 5)].average_delay == 8
+    assert context["cells"][(7, 5)].average_delay == 2
+    assert (context["first_date"].isoformat(), context["last_date"].isoformat()) == (
+        "2026-10-25", "2026-10-26",
+    )
+    assert "Scheduled dates 25 Oct 2026 – 26 Oct 2026" in page
+    assert "Sunday 23:00–24:00" in page and "Monday 05:00–06:00" in page
+
+
+def test_patterns_exclude_missing_invalid_and_out_of_service_hours(client, dashboard_data, clock):
+    seed, context = dashboard_data
+    clock.instant = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    seed(
+        {"train_code": "VALID", "train_date": "2026-10-25", "scheduled_time": "05:00"},
+        {"train_code": "MISSING", "train_date": "2026-10-24", "scheduled_time": ""},
+        {"train_code": "BAD", "train_date": "2026-10-24", "scheduled_time": "05:60"},
+        {"train_code": "EARLY", "train_date": "2026-10-24", "scheduled_time": "04:59"},
+        {"train_code": "LATE", "train_date": "2026-10-26", "scheduled_time": "24:00"},
+    )
+    page = client.get("/patterns").get_data(as_text=True)
+    assert sum(cell.readings for cell in context["cells"].values()) == 1
+    assert context["first_date"] == context["last_date"]
+    assert context["first_date"].isoformat() == "2026-10-25"
+    assert "Scheduled dates 25 Oct 2026" in page
+    assert "24 Oct 2026" not in page and "26 Oct 2026" not in page
+
+
+def test_patterns_count_latest_reading_per_train_station_and_clip_early_delays(
+    client, dashboard_data,
+):
+    seed, context = dashboard_data
+    seed(
+        {"train_code": "SAME", "delay_minutes": -5},
+        {"train_code": "SAME", "station": "TARA", "delay_minutes": 5},
+        {"train_code": "SAME", "station": "HAZEF", "delay_minutes": 90},
+        {"train_code": "SAME", "station": "HZLCH", "delay_minutes": 7},
+    )
+    client.get("/patterns")
+    cell = context["cells"][(2, 9)]
+    assert cell.readings == 3  # Legacy Hazelhatch alias and canonical row are one station.
+    assert float(cell.average_delay) == 4  # (0 + 5 + 7) / 3.
+
+
+def test_patterns_thresholds_and_worst_ignore_sparse_cells(client, dashboard_data, clock):
+    seed, context = dashboard_data
+    clock.instant = datetime(2026, 9, 26, 12, tzinfo=UTC)
+    seed(*[
+        {"train_code": f"S{i}", "train_date": "2026-09-25", "scheduled_time": "17:00",
+         "delay_minutes": 99} for i in range(9)
+    ], *[
+        {"train_code": f"E{i}", "train_date": "2026-09-22", "scheduled_time": "05:00",
+         "delay_minutes": 6} for i in range(10)
+    ])
+    page = client.get("/patterns").get_data(as_text=True)
+    assert context["cells"][(5, 17)].readings == 9
+    assert context["cells"][(2, 5)].readings == 10
+    assert (context["worst"].weekday, context["worst"].hour) == (2, 5)
+    assert "Worst: Tuesday 05:00–06:00, average 6 min late (10 readings)" in page
+    assert page.count('class="heat-cell heat-sparse"') == 1
+    assert page.count('class="heat-cell heat-empty"') == 131
+    assert "Not enough data yet" in page and "No readings · 0 readings" in page
+    assert '<div class="visually-hidden"><table>' in page
+
+
+def test_patterns_scope_and_empty_state(client, dashboard_data):
+    seed, context = dashboard_data
+    empty = client.get("/patterns").get_data(as_text=True)
+    assert context["first_date"] is None and context["last_date"] is None
+    assert "Scheduled dates" not in empty
+    assert "Not enough data yet. This fills in as more days are collected." in empty
+    assert 'aria-current="page">Delay patterns' in empty
+    seed(
+        {"station": "CNLLY", "delay_minutes": 1},
+        {"station": "ARHAN", "train_code": "HISTORICAL", "train_date": "2026-09-21",
+         "delay_minutes": 9},
+    )
+    client.get("/patterns")
+    assert context["cells"][(2, 9)].readings == 1
+    assert context["first_date"].isoformat() == "2026-09-22"
+    assert context["station"] == ""
+    client.get("/patterns?station=ARHAN")
+    assert context["station"] == "ARHAN"
+    assert context["cells"][(1, 9)].average_delay == 9
+    assert context["first_date"].isoformat() == "2026-09-21"
+    client.get("/patterns?station=INVALID")
+    assert context["station"] == ""  # Existing query-filter behaviour: reset to all monitored.
+    assert context["cells"][(2, 9)].readings == 1
