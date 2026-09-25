@@ -260,3 +260,12 @@ def test_api_reports_error_when_no_station_has_coordinates(app, client, upstream
     assert (body["status"], body["reason"]) == ("error", "No monitored station has map coordinates.")
     assert "no monitored station has coordinates" in caplog.text
     upstream.assert_not_called()
+
+
+def test_live_map_includes_train_legend_and_list(client):
+    """The map page carries the train legend entry, toggle and accessible train list."""
+    page = client.get("/map").get_data(as_text=True)
+
+    assert "Train (last reported position)" in page
+    assert 'id="map-show-trains"' in page
+    assert "Trains on the network" in page
