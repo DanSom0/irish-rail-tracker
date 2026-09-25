@@ -518,7 +518,7 @@ def network_api():
 def trains_api():
     return jsonify(current_trains(
         current_app.config["IRISH_RAIL_TRAINS_API_URL"],
-        current_app.config["REQUEST_TIMEOUT_SECONDS"],
+        current_app.config["TRAINS_REQUEST_TIMEOUT_SECONDS"],
         current_app.config["STATION_CODES"],
     ))
 

@@ -117,7 +117,8 @@ Copy the settings from [`.env.production.example`](../.env.production.example) i
 | `POSTGRES_PASSWORD` | Required | Random hex password; generate with `openssl rand -hex 32`. |
 | `STATION_CODES` | Unset | Optional comma-separated override; defaults to the 20 stations in `app/config.py`, including when set to an empty value. |
 | `FETCH_INTERVAL_MINUTES` | `5` | Minutes between station checks. |
-| `REQUEST_TIMEOUT_SECONDS` | `15` | API request timeout in seconds. |
+| `REQUEST_TIMEOUT_SECONDS` | `15` | Station API request timeout in seconds (worker). |
+| `TRAINS_REQUEST_TIMEOUT_SECONDS` | `3` | Train positions request timeout in seconds; kept short because the web server fetches during `/api/trains`. |
 | `IRISH_RAIL_API_URL` | Unset | Optional API address; defaults to `http://api.irishrail.ie/realtime/realtime.asmx/getStationDataByCodeXML`. |
 | `BACKUP_BUCKET` | Required | Terraform's backup bucket name. |
 | `AWS_REGION` | Required (`eu-west-1` here) | Backup bucket region. |
