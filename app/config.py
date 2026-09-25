@@ -18,7 +18,13 @@ class Config:
         "IRISH_RAIL_API_URL",
         "http://api.irishrail.ie/realtime/realtime.asmx/getStationDataByCodeXML",
     )
+    IRISH_RAIL_TRAINS_API_URL = os.getenv(
+        "IRISH_RAIL_TRAINS_API_URL",
+        "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+    )
     STATION_CODES = station_codes(os.getenv("STATION_CODES", "").split(",")) or DEFAULT_STATION_CODES
     FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES", "5"))
     REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
+    # Train positions are fetched during a web request, so a hung feed must not hold a Gunicorn worker for long.
+    TRAINS_REQUEST_TIMEOUT_SECONDS = float(os.getenv("TRAINS_REQUEST_TIMEOUT_SECONDS", "3"))
     SQLALCHEMY_TRACK_MODIFICATIONS = False

@@ -31,6 +31,8 @@
   --heat-sparse-bg: #e9f0f1;
   --heat-sparse-line: #9bb2ba;
   --heat-border: #c2d0d5;
+  --train: #4a3fb0;
+  --train-fg: #fff;
   --space-1: 8px;
   --space-2: 16px;
   --space-3: 24px;
@@ -218,7 +220,7 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
   tbody tr:hover { background: var(--soft); }
 }
 @media (prefers-color-scheme: dark) {
-  :root { color: #e6edf1; background: #111b21; --surface: #1b2931; --muted: #afc1ca; --line: #354750; --soft: #20323b; --accent: #7ddbd0; --on-time: #a4e3bf; --on-time-bg: #233e32; --minor: #f5d487; --minor-bg: #433921; --major: #ffb0b5; --major-bg: #462b32; --finder-bg: #183b3d; --finder-fg: #e6edf1; --finder-muted: #c2d7d7; --finder-outline: #8daead; --finder-action: #7ddbd0; --finder-action-fg: #102a2c; --finder-action-border: #7ddbd0; --table-head-bg: #2c3e48; --footer-bg: #0c161b; --heat-empty: #17232a; --heat-sparse-bg: #27353d; --heat-sparse-line: #708c98; --heat-border: #4c626c; }
+  :root { color: #e6edf1; background: #111b21; --surface: #1b2931; --muted: #afc1ca; --line: #354750; --soft: #20323b; --accent: #7ddbd0; --on-time: #a4e3bf; --on-time-bg: #233e32; --minor: #f5d487; --minor-bg: #433921; --major: #ffb0b5; --major-bg: #462b32; --finder-bg: #183b3d; --finder-fg: #e6edf1; --finder-muted: #c2d7d7; --finder-outline: #8daead; --finder-action: #7ddbd0; --finder-action-fg: #102a2c; --finder-action-border: #7ddbd0; --table-head-bg: #2c3e48; --footer-bg: #0c161b; --heat-empty: #17232a; --heat-sparse-bg: #27353d; --heat-sparse-line: #708c98; --heat-border: #4c626c; --train: #bdb7ff; --train-fg: #1b1742; }
   button, .button { color: #102a2c; }
 }
 @media (max-width: 639px) {
@@ -311,6 +313,39 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .map-list-item .map-station-link { display: inline-block; font-size: 14px; }
 .map-reading { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
 .map-list-item .unchanged, .map-panel .unchanged { color: var(--muted); }
+/* Train positions: indigo, square-cornered icons so they never read as station delay markers. */
+.map-toggle { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 44px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.map-toggle input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.train-glyph { display: block; width: 16px; height: 16px; flex: none; }
+.train-glyph-body { fill: currentColor; }
+.train-glyph-cut { fill: var(--train); }
+.train-glyph-rail { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+.train-marker, .train-badge { display: flex; align-items: center; justify-content: center; gap: 4px; height: 26px; background: var(--train); color: var(--train-fg); border: 2px solid var(--surface); border-radius: 6px; box-shadow: 0 1px 4px #0005; cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.train-marker { width: 26px; }
+.train-badge { width: 88px; padding-inline: 6px; }
+.train-icon:focus-visible { outline: none; }
+.train-icon:focus-visible > div { outline: 3px solid var(--accent); outline-offset: 2px; }
+.trains-hidden .train-icon { display: none; }
+.train-legend-icon { width: 20px; height: 20px; border-width: 1px; cursor: default; }
+.train-legend-icon .train-glyph { width: 13px; height: 13px; }
+.map-panel-back { min-height: 36px; padding: 4px 10px; margin-bottom: var(--space-2); background: var(--surface); color: var(--accent); }
+.train-direction { color: var(--muted); font-size: 14px; }
+.train-destination { font-weight: 650; }
+.train-message { white-space: pre-line; font-size: 16px; line-height: 1.45; }
+.train-position { color: var(--muted); font-size: 13px; }
+.train-gone { padding: 4px var(--space-1); background: var(--minor-bg); color: var(--minor); border-radius: 3px; font-size: 14px; font-weight: 650; }
+.train-choices { list-style: none; margin: var(--space-2) 0; padding: 0; }
+.train-choice { display: grid; gap: 2px; width: 100%; min-height: 44px; margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); background: var(--surface); color: inherit; border: 1px solid var(--line); border-left: 4px solid var(--train); text-align: left; font-weight: 400; }
+.train-choice strong { font-weight: 700; }
+.train-choice span { color: var(--muted); font-size: 13px; }
+.train-list-section { margin-block: var(--space-4); }
+.train-list { list-style: none; margin: 0; padding: 0; }
+.train-list-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-2); align-items: start; padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2); border-bottom: 1px solid var(--line); border-left: 4px solid var(--train); }
+.train-list-item > :not(.train-show) { grid-column: 1; margin: 0; }
+.train-list-heading { display: flex; flex-wrap: wrap; gap: 0 var(--space-1); align-items: baseline; }
+.train-list-heading span { color: var(--muted); font-size: 13px; }
+.train-message-compact { font-size: 14px; }
+.train-show { grid-column: 2; grid-row: 1 / span 4; align-self: center; min-height: 44px; padding: 4px 14px; background: var(--surface); color: var(--accent); }
 @media (max-width: 639px) {
   #network-map { height: 350px; touch-action: pan-y; }
   .map-panel { position: fixed; z-index: 1100; top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 65vh; border-radius: 12px 12px 0 0; box-shadow: 0 -8px 32px #0006; }

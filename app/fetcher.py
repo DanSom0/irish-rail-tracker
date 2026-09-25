@@ -9,23 +9,9 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.extensions import db
 from app.models import Observation
+from app.xml_helpers import child_text, find_rows
 
 logger = logging.getLogger(__name__)
-
-
-def _text(element: ElementTree.Element, name: str) -> str:
-    """Return a child value regardless of the document's XML namespace."""
-    for child in element:
-        if child.tag.rsplit("}", 1)[-1] == name:
-            return child.text.strip() if child.text else ""
-    return ""
-
-
-def _station_rows(root: ElementTree.Element) -> list[ElementTree.Element]:
-    """Find station data rows in namespaced and non-namespaced responses."""
-    namespace = root.tag.partition("}")[0].removeprefix("{")
-    path = f".//{{{namespace}}}objStationData" if namespace else ".//objStationData"
-    return root.findall(path)
 
 
 def _normalise_train_date(train_date: str) -> str:
@@ -40,14 +26,14 @@ def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]
     except ElementTree.ParseError:
         logger.warning("invalid station XML", exc_info=True, extra={"station": station})
         return []
-    rows = _station_rows(root)
+    rows = find_rows(root, "objStationData")
     logger.info("station XML parsed", extra={"station": station, "entries_parsed": len(rows)})
     observations: list[dict[str, object]] = []
     for row in rows:
-        train_code = _text(row, "Traincode")
-        raw_train_date = _text(row, "Traindate")
-        scheduled_departure = _text(row, "Schdepart")
-        scheduled_arrival = _text(row, "Scharrival")
+        train_code = child_text(row, "Traincode")
+        raw_train_date = child_text(row, "Traindate")
+        scheduled_departure = child_text(row, "Schdepart")
+        scheduled_arrival = child_text(row, "Scharrival")
         scheduled_time = (
             scheduled_arrival if scheduled_departure == "00:00" else scheduled_departure
         )
@@ -63,7 +49,7 @@ def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]
             )
             continue
         try:
-            delay_minutes = int(_text(row, "Late") or "0")
+            delay_minutes = int(child_text(row, "Late") or "0")
         except ValueError:
             logger.warning("skipping invalid delay", extra={"station": station, "train_code": train_code})
             continue
@@ -72,8 +58,8 @@ def parse_station_data(xml_body: bytes, station: str) -> list[dict[str, object]]
                 "station": station,
                 "train_code": train_code,
                 "train_date": train_date,
-                "origin": _text(row, "Origin") or "Unknown",
-                "destination": _text(row, "Destination") or "Unknown",
+                "origin": child_text(row, "Origin") or "Unknown",
+                "destination": child_text(row, "Destination") or "Unknown",
                 "scheduled_time": scheduled_time,
                 "delay_minutes": delay_minutes,
             }

@@ -25,6 +25,7 @@ from app.stations import (
     canonical_station,
     station_codes,
 )
+from app.train_positions import current_trains
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
@@ -511,6 +512,15 @@ def delay_patterns():
 @dashboard.get("/api/network")
 def network_api():
     return jsonify(stations=_network_stations(datetime.now(UTC)))
+
+
+@dashboard.get("/api/trains")
+def trains_api():
+    return jsonify(current_trains(
+        current_app.config["IRISH_RAIL_TRAINS_API_URL"],
+        current_app.config["TRAINS_REQUEST_TIMEOUT_SECONDS"],
+        current_app.config["STATION_CODES"],
+    ))
 
 
 @dashboard.get("/map")

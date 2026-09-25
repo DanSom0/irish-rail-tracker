@@ -33,6 +33,8 @@ docker stop irishrail-test-postgres
 ```
 
 Tests delete observations and drop the schema: use only the throwaway database.
+After changing the live map's JavaScript, template or styles, run the browser review in
+[tests/browser/README.md](tests/browser/README.md); it is manual, not part of CI.
 Deployment tests mock Docker, curl, and cron; they do not verify real image tags.
 Terraform 1.16.3 validation (no AWS credentials or state backend required):
 
