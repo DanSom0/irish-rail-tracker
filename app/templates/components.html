@@ -24,11 +24,11 @@
 </section>
 {% endmacro %}
 
-{% macro station_filter(stations, station, endpoint, label='Station', button='Apply', all_stations=true) %}
+{% macro station_filter(stations, station, endpoint, label='Station', button='Apply', all_stations=true, historical_label='Not currently monitored') %}
 <form class="station-filter" method="get" action="{{ url_for(endpoint) }}">
   {% if day is defined and day == "yesterday" %}<input type="hidden" name="day" value="yesterday">{% endif %}
   <label for="station">{{ label }}</label>
-  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in (stations + ([station] if station and station not in stations else []))|sort_stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}{% if code not in monitored_stations %} · Not currently monitored{% endif %}</option>{% endfor %}</select>
+  <select id="station" name="station"{% if not all_stations %} required{% endif %}><option value="">{{ 'All stations' if all_stations else 'Choose your station…' }}</option>{% for code in (stations + ([station] if station and station not in stations else []))|sort_stations %}<option value="{{ code }}"{{ ' selected' if station == code else '' }}>{{ code|station_name }}{% if code not in monitored_stations %} · {{ historical_label }}{% endif %}</option>{% endfor %}</select>
   <button type="submit">{{ button }}</button>
 </form>
 {% endmacro %}

@@ -171,6 +171,7 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .heatmap { display: block; max-width: none; font-family: inherit; font-variant-numeric: tabular-nums; }
 .heat-axis { fill: var(--muted); font-size: 13px; font-weight: 600; }
 .heat-hour, .heat-number { text-anchor: middle; }
+.heat-no-data { font-weight: 400; }
 .heat-cell { stroke: var(--heat-border); stroke-width: 1; }
 .heat-0 { fill: var(--heat-0); background: var(--heat-0); }
 .heat-1 { fill: var(--heat-1); background: var(--heat-1); }
@@ -185,6 +186,7 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .heat-legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); margin-top: var(--space-2); color: var(--muted); font-size: 13px; }
 .heat-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .heat-legend i { width: 16px; height: 16px; border: 1px solid var(--heat-border); border-radius: 2px; flex: none; }
+.patterns-figures { margin-top: var(--space-2); }
 .patterns-method { margin-top: var(--space-3); max-width: 72ch; color: var(--muted); font-size: 13px; }
 .not-found { max-width: 720px; padding-block: var(--space-3); }
 .not-found > p:not(.eyebrow) { margin-block: var(--space-2); color: var(--muted); }

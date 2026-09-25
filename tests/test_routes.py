@@ -982,7 +982,7 @@ def test_patterns_bucket_scheduled_dublin_day_across_october_dst_and_midnight(
     assert (context["first_date"].isoformat(), context["last_date"].isoformat()) == (
         "2026-10-25", "2026-10-26",
     )
-    assert "Scheduled dates 25 Oct 2026 – 26 Oct 2026" in page
+    assert "Data from 25–26 October 2026" in page
     assert "Sunday 23:00–24:00" in page and "Monday 05:00–06:00" in page
 
 
@@ -1000,7 +1000,7 @@ def test_patterns_exclude_missing_invalid_and_out_of_service_hours(client, dashb
     assert sum(cell.readings for cell in context["cells"].values()) == 1
     assert context["first_date"] == context["last_date"]
     assert context["first_date"].isoformat() == "2026-10-25"
-    assert "Scheduled dates 25 Oct 2026" in page
+    assert "Data from 25 October 2026" in page
     assert "24 Oct 2026" not in page and "26 Oct 2026" not in page
 
 
@@ -1034,10 +1034,14 @@ def test_patterns_thresholds_and_worst_ignore_sparse_cells(client, dashboard_dat
     assert context["cells"][(5, 17)].readings == 9
     assert context["cells"][(2, 5)].readings == 10
     assert (context["worst"].weekday, context["worst"].hour) == (2, 5)
-    assert "Worst: Tuesday 05:00–06:00, average 6 min late (10 readings)" in page
+    assert "Data from 22–25 September 2026" in page
+    assert "Highest average in this period: Tuesday 05:00–06:00, 6 min (10 readings)" in page
     assert page.count('class="heat-cell heat-sparse"') == 1
-    assert page.count('class="heat-cell heat-empty"') == 131
-    assert "Not enough data yet" in page and "No readings · 0 readings" in page
+    assert page.count('class="heat-cell heat-empty"') == 36
+    assert page.count("No data collected") == 5
+    assert all(label in page for label in ("Under 2 min", "2–5 min", "5–10 min", "10+ min", "Too little data", "No data"))
+    assert "Some hours have too little data to compare." in page
+    assert "Scheduled time" in page and "Average delay in minutes" in page
     assert '<div class="visually-hidden"><table>' in page
 
 
@@ -1045,7 +1049,7 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
     seed, context = dashboard_data
     empty = client.get("/patterns").get_data(as_text=True)
     assert context["first_date"] is None and context["last_date"] is None
-    assert "Scheduled dates" not in empty
+    assert "Data from" not in empty
     assert "Not enough data yet. This fills in as more days are collected." in empty
     assert 'aria-current="page">Delay patterns' in empty
     seed(
@@ -1053,14 +1057,20 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
         {"station": "ARHAN", "train_code": "HISTORICAL", "train_date": "2026-09-21",
          "delay_minutes": 9},
     )
-    client.get("/patterns")
+    all_page = client.get("/patterns").get_data(as_text=True)
     assert context["cells"][(2, 9)].readings == 1
     assert context["first_date"].isoformat() == "2026-09-22"
     assert context["station"] == ""
-    client.get("/patterns?station=ARHAN")
+    assert "All monitored stations" in all_page
+    assert 'value="ARHAN">Ardrahan · Historical data only</option>' in all_page
+    historical_page = client.get("/patterns?station=ARHAN").get_data(as_text=True)
     assert context["station"] == "ARHAN"
     assert context["cells"][(1, 9)].average_delay == 9
     assert context["first_date"].isoformat() == "2026-09-21"
+    assert "Historical data only" in historical_page
+    assert "Data from 21 September 2026" in historical_page
+    assert "Earlier updates are overwritten." not in historical_page
+    assert "Earlier updates are overwritten." in client.get("/about/data").get_data(as_text=True)
     client.get("/patterns?station=INVALID")
     assert context["station"] == ""  # Existing query-filter behaviour: reset to all monitored.
     assert context["cells"][(2, 9)].readings == 1

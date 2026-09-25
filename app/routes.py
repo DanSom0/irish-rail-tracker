@@ -497,8 +497,8 @@ def delay_patterns():
     worst = max((row for row in rows if row.readings >= 10),
                 key=lambda row: row.average_delay, default=None)
     return render_template(
-        "patterns.html", title="When are delays worst?", active="patterns", **context,
-        cells=cells, worst=worst,
+        "patterns.html", title="Delays by day and hour", active="patterns", **context,
+        cells=cells, worst=worst, days_with_data={row.weekday for row in rows},
         first_date=rows[0].first_date if rows else None,
         last_date=rows[0].last_date if rows else None,
         days=("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
