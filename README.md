@@ -40,8 +40,8 @@ Open [localhost:8000](http://localhost:8000). The worker calls the live API. See
 
 1. Run Ruff, pytest against Postgres, Terraform checks, and a Docker build.
 2. After checks pass on `main`, publish the tested commit's image to GitHub's image registry (GHCR), tagged with its commit ID (SHA).
-3. EC2 downloads that image and starts the services with Compose.
-4. Check `/health` for HTTP 200 for up to 60 seconds. Failure fails the deploy job; rollback is manual.
+3. Copy that commit's Compose file and scripts to the server as a release bundle; EC2 downloads the image and starts the services with Compose.
+4. Check `/health` for HTTP 200 for up to 60 seconds. If it fails, the previous release is restarted and the deploy job fails; a later rollback is manual.
 
 ## Design decisions
 

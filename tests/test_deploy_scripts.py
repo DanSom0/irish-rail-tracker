@@ -33,8 +33,9 @@ def command(deployment, name, body):
 
 
 def run(deployment, name, *args):
+    path = deployment / name if "/" in name else deployment / "scripts" / name
     return subprocess.run(
-        ["bash", str(deployment / "scripts" / name), *args],
+        ["bash", str(path), *args],
         cwd="/", capture_output=True, text=True, timeout=10, check=False,
     )
 
@@ -101,22 +102,140 @@ exit 1
     assert not (deployment / "replaced").exists()
 
 
-@pytest.mark.parametrize("cached", [True, False])
-def test_rollback_uses_the_requested_sha(deployment, cached):
-    sha = "a" * 40
-    command(deployment, "docker", f'''
-printf '%s %s\\n' "$IMAGE_TAG" "$*" >> "$CHECK_DIR/docker.log"
-if [[ $1 == image ]]; then exit {0 if cached else 1}; fi
+OLD, NEW = "a" * 40, "b" * 40
+# A harmless Compose change between two releases, as a new environment variable would be.
+OLD_COMPOSE = (ROOT / "docker-compose.prod.yml").read_text()
+NEW_COMPOSE = OLD_COMPOSE.replace(
+    "      IRISH_RAIL_API_URL:\n", "      IRISH_RAIL_API_URL:\n      RELEASE_CHECK: new\n")
+assert NEW_COMPOSE != OLD_COMPOSE
+
+
+def add_release(deployment, sha, compose):
+    bundle = deployment / "releases" / sha
+    shutil.copytree(ROOT / "scripts", bundle / "scripts")
+    (bundle / "docker-compose.prod.yml").write_text(compose)
+
+
+def activate(deployment, sha):
+    """Lay out a server as a successful deploy of sha leaves it."""
+    (deployment / "current").unlink(missing_ok=True)
+    (deployment / "current").symlink_to(f"releases/{sha}")
+    for name in ["docker-compose.prod.yml", "scripts"]:
+        path = deployment / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.exists():
+            shutil.rmtree(path)
+        path.symlink_to(f"current/{name}")
+    env = deployment / ".env"
+    lines = [line for line in env.read_text().splitlines() if not line.startswith("IMAGE_TAG=")]
+    env.write_text("\n".join([*lines, f"IMAGE_TAG={sha}", ""]))
+
+
+@pytest.fixture
+def server(deployment, monkeypatch):
+    """Two releases whose Compose files differ; the new one is current."""
+    add_release(deployment, OLD, OLD_COMPOSE)
+    add_release(deployment, NEW, NEW_COMPOSE)
+    activate(deployment, NEW)
+    monkeypatch.setenv("HEALTHY", f"{OLD} {NEW}")
+    monkeypatch.setenv("CACHED", "1")
+    # Docker records the Compose file and image tag it last started; curl reports HTTP 200
+    # only while a release listed in HEALTHY is running.
+    command(deployment, "docker", '''
+printf '%s %s\\n' "${IMAGE_TAG:-}" "$*" >> "$CHECK_DIR/docker.log"
+if [[ $1 == image ]]; then exit $((CACHED == 1 ? 0 : 1)); fi
+if [[ " $* " == *" up -d "* ]]; then
+  while [[ $1 != -f ]]; do shift; done
+  cp "$2" "$CHECK_DIR/running.yml"
+  printf '%s' "$IMAGE_TAG" > "$CHECK_DIR/running.tag"
+fi
 ''')
-    command(deployment, "curl", "printf 200")
-    result = run(deployment, "rollback.sh", sha)
+    command(deployment, "curl", '''
+if [[ " $HEALTHY " == *" $(cat "$CHECK_DIR/running.tag") "* ]]; then printf 200; else printf 503; fi
+''')
+    return deployment
+
+
+def running(server):
+    return (server / "running.tag").read_text(), (server / "running.yml").read_text()
+
+
+def assert_current(server, sha, compose):
+    assert os.readlink(server / "current") == f"releases/{sha}"
+    assert (server / "docker-compose.prod.yml").read_text() == compose
+    assert (server / "scripts" / "rollback.sh").exists()
+    env = (server / ".env").read_text()
+    assert env.count("IMAGE_TAG=") == env.count(f"IMAGE_TAG={sha}\n") == 1
+
+
+@pytest.mark.parametrize("cached", [True, False])
+def test_rollback_restores_the_older_compose_file_with_its_image(server, monkeypatch, cached):
+    monkeypatch.setenv("CACHED", "1" if cached else "0")
+    result = run(server, "rollback.sh", OLD)  # Through the scripts link, as an operator would.
     assert result.returncode == 0, result.stderr
-    log = (deployment / "docker.log").read_text()
-    assert all(line.startswith(sha) for line in log.splitlines())
-    assert ("pull web worker" in log) == (not cached)
-    assert "up -d" in log
-    assert (deployment / ".env").read_text().count(f"IMAGE_TAG={sha}\n") == 1
-    assert "IMAGE_TAG=latest" not in (deployment / ".env").read_text()
+    assert running(server) == (OLD, OLD_COMPOSE)
+    assert_current(server, OLD, OLD_COMPOSE)
+    log = (server / "docker.log").read_text()
+    assert all(line.startswith(OLD) for line in log.splitlines())
+    assert (f"-f releases/{OLD}/docker-compose.prod.yml pull web worker" in log) == (not cached)
+    assert "up -d --remove-orphans" in log
+    assert (server / "releases" / NEW).is_dir()  # Kept to roll forward again.
+
+
+def test_failed_health_check_leaves_the_previous_release_active(server, monkeypatch):
+    activate(server, OLD)
+    monkeypatch.setenv("HEALTHY", OLD)
+    result = run(server, f"releases/{NEW}/scripts/activate-release.sh", "--pull", NEW)
+    assert result.returncode != 0
+    assert "endpoint did not return HTTP 200" in result.stderr
+    assert f"{OLD} is running and still current" in result.stderr
+    log = (server / "docker.log").read_text()
+    assert f"{NEW} compose --env-file .env -f releases/{NEW}/docker-compose.prod.yml pull\n" in log
+    assert running(server) == (OLD, OLD_COMPOSE)
+    assert_current(server, OLD, OLD_COMPOSE)
+
+
+def test_rollback_without_a_bundle_changes_nothing(server):
+    result = run(server, "rollback.sh", "c" * 40)
+    assert result.returncode != 0
+    assert "No release bundle" in result.stderr
+    assert not (server / "docker.log").exists()
+    assert_current(server, NEW, NEW_COMPOSE)
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_first_bundled_deploy_keeps_the_running_files_as_a_release(server, monkeypatch, healthy):
+    for name in ["current", "docker-compose.prod.yml", "scripts"]:
+        (server / name).unlink()
+    shutil.rmtree(server / "releases" / OLD)
+    # Before release bundles, deploy copied the running release's files to the top level.
+    (server / "docker-compose.prod.yml").write_text(OLD_COMPOSE)
+    shutil.copytree(ROOT / "scripts", server / "scripts")
+    env = server / ".env"
+    env.write_text(env.read_text().replace(f"IMAGE_TAG={NEW}\n", f"IMAGE_TAG={OLD}\n"))
+    if not healthy:
+        monkeypatch.setenv("HEALTHY", OLD)
+    result = run(server, f"releases/{NEW}/scripts/activate-release.sh", "--pull", NEW)
+    assert (result.returncode == 0) == healthy, result.stderr
+    assert (server / "releases" / OLD / "docker-compose.prod.yml").read_text() == OLD_COMPOSE
+    if healthy:
+        assert running(server) == (NEW, NEW_COMPOSE)
+        assert_current(server, NEW, NEW_COMPOSE)
+        assert (server / "scripts").is_symlink()
+    else:
+        assert running(server) == (OLD, OLD_COMPOSE)
+        assert os.readlink(server / "current") == f"releases/{OLD}"
+        assert (server / "docker-compose.prod.yml").read_text() == OLD_COMPOSE
+        assert f"IMAGE_TAG={OLD}\n" in env.read_text()
+
+
+def test_nightly_backup_from_a_release_uses_the_shared_directory(server):
+    (server / "releases" / NEW / "scripts" / "backup.sh").write_text(
+        'source "$(dirname "${BASH_SOURCE[0]}")/app-dir.sh"; pwd -P\n')
+    assert run(server, "nightly-backup.sh").returncode == 0  # The path cron runs.
+    assert (server / "backup.log").read_text().strip() == str(server.resolve())
+    assert not (server / "releases" / NEW / "backup.log").exists()
 
 
 def test_rollback_rejects_invalid_tags_before_running_docker(deployment):
@@ -153,13 +272,11 @@ esac
     assert (deployment / "attempts").read_text().strip() == "5"
 
 
-def test_healthcheck_and_rollback_fail_when_never_healthy(deployment):
+def test_healthcheck_fails_when_never_healthy(deployment):
     command(deployment, "curl", "printf 503")
-    command(deployment, "docker", "exit 0")
-    result = run(deployment, "rollback.sh", "a" * 40)
+    result = run(deployment, "healthcheck.sh", "http://localhost/health")
     assert result.returncode != 0
     assert "endpoint did not return HTTP 200" in result.stderr
-    assert "IMAGE_TAG=" + "a" * 40 in (deployment / ".env").read_text()
 
 
 @pytest.mark.parametrize("size,rotated", [(1024 * 1024, False), (1024 * 1024 + 1, True)])
@@ -213,14 +330,30 @@ def removed(deployment):
     ("a" * 40, {"d" * 40, "c" * 40}),  # After rolling back to an older release.
 ])
 def test_prune_images_keeps_current_and_two_previous_releases(deployment, current, kept):
-    env = deployment / ".env"
-    env.write_text(env.read_text() + f"IMAGE_TAG={current}\n")
+    releases = {tag for _, tag in RELEASES if len(tag) == 40}
+    for sha in releases | {"e" * 40}:  # The last bundle's image is no longer on the server.
+        add_release(deployment, sha, OLD_COMPOSE)
+    (deployment / "releases" / ".incoming-unrelated").mkdir()
+    activate(deployment, current)
     image_commands(deployment)
     result = run(deployment, "prune-images.sh")
     assert result.returncode == 0, result.stderr
-    releases = {tag for _, tag in RELEASES if len(tag) == 40}
     assert removed(deployment) == (releases - kept - {current}) | {"latest"}
     assert "Kept " + current + " and 2 previous release(s)" in result.stdout
+    # Bundles are kept for exactly the releases whose images are kept.
+    bundles = {path.name for path in (deployment / "releases").iterdir()}
+    assert bundles == kept | {current, ".incoming-unrelated"}
+
+
+def test_prune_images_keeps_all_bundles_if_images_cannot_be_listed(deployment):
+    for sha in ["a" * 40, "b" * 40, "c" * 40, "d" * 40]:
+        add_release(deployment, sha, OLD_COMPOSE)
+    activate(deployment, "d" * 40)
+    command(deployment, "docker", "exit 1")
+    result = run(deployment, "prune-images.sh")
+    assert result.returncode != 0
+    assert "nothing removed" in result.stderr
+    assert len(list((deployment / "releases").iterdir())) == 4
 
 
 def test_prune_images_refuses_without_a_pinned_sha(deployment):
