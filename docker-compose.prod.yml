@@ -1,9 +1,17 @@
 name: irish-rail-tracker
 
 # Run on the server with --env-file /opt/irish-rail-tracker/.env.
+# Each container keeps at most 3 x 10 MB of logs on the shared root disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
+    logging: *logging
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
@@ -18,6 +26,7 @@ services:
       retries: 10
   web:
     image: ghcr.io/dansom0/irish-rail-tracker:${IMAGE_TAG:-latest}
+    logging: *logging
     restart: unless-stopped
     environment:
       STATION_CODES:
@@ -29,6 +38,7 @@ services:
         condition: service_healthy
   worker:
     image: ghcr.io/dansom0/irish-rail-tracker:${IMAGE_TAG:-latest}
+    logging: *logging
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
     environment:

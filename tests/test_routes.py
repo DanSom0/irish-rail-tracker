@@ -385,6 +385,35 @@ def test_status_flags_only_stale_stations_during_service_hours(
         assert "No recent readings" in page
 
 
+@pytest.mark.parametrize("used,free,shown,badge", [
+    (54, 146, "27% used · 146 Bytes free of 200 Bytes", False),
+    (161, 39, "81% used · 39 Bytes free of 200 Bytes", True),
+])
+def test_status_shows_disk_usage_and_warning(
+    client, dashboard_data, monkeypatch, caplog, used, free, shown, badge,
+):
+    seed, _ = dashboard_data
+    seed({})
+    monkeypatch.setattr("app.disk.shutil.disk_usage",
+                        lambda path: SimpleNamespace(total=200, used=used, free=free))
+    page = client.get("/status").get_data(as_text=True)
+    assert shown in page
+    assert ('<span class="badge major">Above 80%</span>' in page) is badge
+    assert ("disk_usage_high" in caplog.text) is badge
+
+
+def test_status_renders_when_disk_usage_is_unavailable(client, dashboard_data, monkeypatch):
+    seed, _ = dashboard_data
+    seed({})
+
+    def fail(path):
+        raise OSError("gone")
+    monkeypatch.setattr("app.disk.shutil.disk_usage", fail)
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert "Disk usage is unavailable." in response.get_data(as_text=True)
+
+
 def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboard_data, monkeypatch):
     seed, context = dashboard_data
     monkeypatch.setitem(app.config, "STATION_CODES", tuple(f"S{i:02}" for i in range(120)))
