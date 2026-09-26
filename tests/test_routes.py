@@ -266,7 +266,7 @@ def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
     assert [train["train_code"] for train in data["HOWTH"]["current_trains"]] == ["BOUNDARY"]
     train = data["CNLLY"]["current_trains"][0]
     assert set(train) == {"train_code", "train_date", "origin", "destination", "direction",
-                          "scheduled", "expected", "expected_day_offset", "delay", "reading_at"}
+                          "scheduled", "expected", "expected_day_offset", "clocks_went_back", "delay", "reading_at"}
     assert train["expected"] == "09:06"
     assert train["reading_at"] == clock.instant.isoformat()
     assert client.get("/").status_code == 200  # Daily statistics retain stale readings.
@@ -926,6 +926,75 @@ def test_expected_time_crosses_dublin_spring_clock_change():
     assert routes.expected_time(row) == ("02:01", 0)
 
 
+@pytest.mark.parametrize("train_date,scheduled,delay,expected,went_back", [
+    # Normal day: unchanged, never noted.
+    ("2026-09-22", "12:34", 7, ("12:41", 0), False),
+    ("2026-09-22", "23:58", 7, ("00:05", 1), False),
+    # 25 October: a repeated 01:xx is its first (IST) occurrence.
+    ("2026-10-25", "01:30", 45, ("01:15", 0), True),
+    ("2026-10-25", "01:50", 15, ("01:05", 0), True),
+    ("2026-10-25", "01:30", 0, ("01:30", 0), False),
+    ("2026-10-25", "01:30", -5, ("01:25", 0), False),
+    ("2026-10-25", "00:50", 20, ("01:10", 0), False),
+    ("2026-10-25", "00:59", 61, ("01:00", 0), False),
+    ("2026-10-25", "02:30", 10, ("02:40", 0), False),
+    # 29 March: a skipped 01:xx uses the pre-change offset.
+    ("2026-03-29", "01:30", 0, ("02:30", 0), False),
+    ("2026-03-29", "01:30", 10, ("02:40", 0), False),
+    ("2026-03-29", "broken", 0, (None, 0), False),
+])
+def test_expected_time_policy_across_dublin_clock_changes(
+    train_date, scheduled, delay, expected, went_back,
+):
+    row = SimpleNamespace(train_date=train_date, scheduled_time=scheduled, delay_minutes=delay)
+    assert routes.expected_time(row) == expected
+    assert routes.clocks_went_back(row) is went_back
+
+
+@pytest.mark.parametrize("instant,rows,expected,clocks", [
+    # 01:10 GMT, after clocks went back: the first 01:20 and 01:30 have passed.
+    ("2026-10-25T01:10:00+00:00", [
+        {"train_code": "LATE", "scheduled_time": "01:30", "delay_minutes": 45},
+        {"train_code": "PASSED", "scheduled_time": "01:30"},
+        {"train_code": "EARLIER", "scheduled_time": "01:20"},
+        {"train_code": "LATER", "scheduled_time": "02:00"},
+    ], ["LATE", "LATER"], ["01:15", "02:00"]),
+    # 02:05 IST, after clocks went forward: skipped 01:30 reads as 02:30.
+    ("2026-03-29T01:05:00+00:00", [
+        {"train_code": "GAP", "scheduled_time": "01:30"},
+        {"train_code": "CROSSED", "scheduled_time": "00:59", "delay_minutes": 2},
+        {"train_code": "SOON", "scheduled_time": "02:10"},
+        {"train_code": "GONE", "scheduled_time": "00:30"},
+    ], ["SOON", "GAP"], ["02:10", "02:30"]),
+])
+def test_next_services_filter_matches_displayed_time_across_clock_changes(
+    client, dashboard_data, clock, instant, rows, expected, clocks,
+):
+    seed, context = dashboard_data
+    clock.instant = datetime.fromisoformat(instant)
+    seed(*rows)
+    page = client.get("/stations/CNLLY").get_data(as_text=True)
+    items = context["pagination"]["items"]
+    assert [row.train_code for row in items] == expected
+    assert [routes.expected_time(row)[0] for row in items] == clocks
+    assert context["pagination"]["total"] == len(expected)
+    assert page.count("<small>clocks went back</small>") == (1 if "LATE" in expected else 0)
+
+
+def test_network_api_flags_clocks_went_back(client, dashboard_data, clock):
+    seed, _ = dashboard_data
+    clock.instant = datetime(2026, 10, 25, 1, 10, tzinfo=UTC)
+    seed(
+        {"train_code": "LATE", "scheduled_time": "01:30", "delay_minutes": 45},
+        {"train_code": "NORMAL", "scheduled_time": "02:00"},
+    )
+    stations = client.get("/api/network").get_json()["stations"]
+    trains = {train["train_code"]: train for station in stations
+              for train in station["current_trains"]}
+    assert (trains["LATE"]["expected"], trains["LATE"]["clocks_went_back"]) == ("01:15", True)
+    assert trains["NORMAL"]["clocks_went_back"] is False
+
+
 def test_service_boards_show_scheduled_expected_destination_and_status(client, dashboard_data):
     seed, _ = dashboard_data
     seed(
@@ -1001,6 +1070,27 @@ def test_patterns_bucket_scheduled_dublin_day_across_october_dst_and_midnight(
     )
     assert "Data from 25–26 October 2026" in page
     assert "Sunday 23:00–24:00" in page and "Monday 05:00–06:00" in page
+
+
+def test_patterns_use_scheduled_wall_clock_hour_on_clock_change_days(
+    client, dashboard_data, clock,
+):
+    """Repeated or skipped 01:xx is outside the 05–23 grid; 05:xx stays at 05:00."""
+    seed, context = dashboard_data
+    clock.instant = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    seed(
+        {"train_code": "REPEAT", "train_date": "2026-10-25", "scheduled_time": "01:30",
+         "delay_minutes": 45},
+        {"train_code": "SKIPPED", "train_date": "2026-03-29", "scheduled_time": "01:30"},
+        {"train_code": "AUTUMN", "train_date": "2026-10-25", "scheduled_time": "05:59",
+         "delay_minutes": 3},
+        {"train_code": "SPRING", "train_date": "2026-03-29", "scheduled_time": "05:10",
+         "delay_minutes": 5},
+    )
+    client.get("/patterns")
+    assert set(context["cells"]) == {(7, 5)}
+    assert context["cells"][(7, 5)].readings == 2
+    assert context["cells"][(7, 5)].average_delay == 4
 
 
 def test_patterns_exclude_missing_invalid_and_out_of_service_hours(client, dashboard_data, clock):

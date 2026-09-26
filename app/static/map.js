@@ -116,7 +116,7 @@
           const row = append(rows, 'li', 'map-service');
           const main = append(row, 'div', 'map-service-main');
           append(main, 'strong', '', direction === 'arrival' ? `Arriving from ${train.origin}` : `Departing to ${train.destination}`);
-          append(main, 'span', '', `Expected ${train.expected || '—'}${train.expected_day_offset ? ` (${train.expected_day_offset > 0 ? '+' : ''}${train.expected_day_offset} day)` : ''}`);
+          append(main, 'span', '', `Expected ${train.expected || '—'}${train.expected_day_offset ? ` (${train.expected_day_offset > 0 ? '+' : ''}${train.expected_day_offset} day)` : ''}${train.clocks_went_back ? ' (clocks went back)' : ''}`);
           append(main, 'span', 'map-service-delay' + (train.delay >= 6 ? ' badge major' : ''), delayText(train.delay));
           const reading = append(row, 'small', 'map-reading', `${train.train_code} · ${train.origin} → ${train.destination} · `);
           const serviceDate = append(reading, 'time', '', train.train_date);

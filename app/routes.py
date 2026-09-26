@@ -83,16 +83,42 @@ def observation_title(value):
     return dublin_time(datetime.fromisoformat(value))
 
 
-@dashboard.app_template_filter("expected_time")
-def expected_time(row):
+def scheduled_and_expected(row):
+    """Scheduled and expected Dublin datetimes for a reading, or None if unparseable.
+
+    The one conversion used for display and filtering. A wall time repeated when
+    clocks go back is its first occurrence (Irish Summer Time); a time skipped when
+    clocks go forward uses the pre-change offset, so 01:30 on that date is 02:30.
+    """
     try:
         scheduled = datetime.combine(
             date.fromisoformat(row.train_date), time.fromisoformat(row.scheduled_time), DUBLIN,
         )
     except ValueError:
-        return None, 0
+        return None
     expected = (scheduled.astimezone(UTC) + timedelta(minutes=row.delay_minutes)).astimezone(DUBLIN)
+    return scheduled, expected
+
+
+@dashboard.app_template_filter("expected_time")
+def expected_time(row):
+    times = scheduled_and_expected(row)
+    if times is None:
+        return None, 0
+    scheduled, expected = times
     return expected.strftime("%H:%M"), (expected.date() - scheduled.date()).days
+
+
+@dashboard.app_template_filter("clocks_went_back")
+def clocks_went_back(row):
+    """True when a not-early train's expected clock reads earlier than its schedule."""
+    times = scheduled_and_expected(row)
+    if times is None:
+        return False
+    scheduled, expected = times
+    # Same-zone datetimes compare by wall clock, so compare instants in UTC.
+    return (expected.astimezone(UTC) >= scheduled.astimezone(UTC)
+            and expected.replace(tzinfo=None) < scheduled.replace(tzinfo=None))
 
 
 @dashboard.app_template_filter("service_kind")
@@ -209,6 +235,7 @@ def _network_stations(now):
             "scheduled": row.scheduled_time,
             "expected": expected,
             "expected_day_offset": day_offset,
+            "clocks_went_back": clocks_went_back(row),
             "delay": row.delay_minutes,
             "reading_at": row.fetched_at.isoformat(),
         })
@@ -357,24 +384,28 @@ def _train_summary(context, *, recent=False):
     )).one()
 
 
-def _services(context, view="delays", *, significant=False):
+def _services(context, *, significant=False):
     latest = _latest_readings(context, recent=True).c
     query = db.select(*latest)
     if significant:
         query = query.where(latest.delay_minutes >= 2)
-    if view == "next":
-        # Stored times can include arrivals; only valid local schedules support this view.
-        scheduled = case((
-            latest.scheduled_time.op("~")(r"^([01][0-9]|2[0-3]):[0-5][0-9]$"),
-            cast(latest.train_date + " " + latest.scheduled_time, DateTime),
-        ))
-        expected = func.timezone("Europe/Dublin", scheduled) + (
-            latest.delay_minutes * text("INTERVAL '1 minute'")
-        )
-        return query.where(expected >= context["now"]).order_by(expected, latest.id)
     return query.order_by(
         latest.delay_minutes.desc(), latest.fetched_at.desc(), latest.id.desc(),
     )
+
+
+def _next_services(context):
+    """Current services not yet expected, ordered with the same conversion as the board."""
+    latest = _latest_readings(context, recent=True).c
+    # Stored times can include arrivals; only valid local schedules support this view.
+    rows = db.session.execute(db.select(*latest).where(
+        latest.scheduled_time.op("~")(r"^([01][0-9]|2[0-3]):[0-5][0-9]$"),
+    )).all()
+    upcoming = [
+        (times[1].astimezone(UTC), row.id, row) for row in rows
+        if (times := scheduled_and_expected(row)) and times[1] >= context["now"]
+    ]
+    return [row for _, _, row in sorted(upcoming)]
 
 
 def _reading_details(rows, now):
@@ -397,17 +428,28 @@ def _reading_details(rows, now):
     }
 
 
-def _paginate(query, per_page=15):
-    """Paginate grouped rows as well as services, without loading the full result."""
+def _page(total, per_page):
     page = max(1, request.args.get("page", 1, type=int))
-    total = db.session.scalar(db.select(func.count()).select_from(query.order_by(None).subquery()))
     pages = max(1, (total + per_page - 1) // per_page)
     if page > pages:
         abort(404)
+    return page, pages
+
+
+def _paginate(query, per_page=15):
+    """Paginate grouped rows as well as services, without loading the full result."""
+    total = db.session.scalar(db.select(func.count()).select_from(query.order_by(None).subquery()))
+    page, pages = _page(total, per_page)
     return {
         "items": db.session.execute(query.limit(per_page).offset((page - 1) * per_page)).all(),
         "page": page, "pages": pages, "total": total,
     }
+
+
+def _paginate_rows(rows, per_page=15):
+    page, pages = _page(len(rows), per_page)
+    start = (page - 1) * per_page
+    return {"items": rows[start:start + per_page], "page": page, "pages": pages, "total": len(rows)}
 
 
 @dashboard.get("/")
@@ -436,7 +478,8 @@ def station_detail(code):
                                 view=request.args.get("view", "next")))
     context = _context(code, strict=True)
     view = "next" if request.args.get("view", "next") == "next" else "delays"
-    pagination = _paginate(_services(context, view))
+    pagination = (_paginate_rows(_next_services(context)) if view == "next"
+                  else _paginate(_services(context)))
     return render_template(
         "station.html", title=station_name(code), active="stations", **context,
         summary=_train_summary(context), pagination=pagination, view=view,

@@ -4,6 +4,7 @@
   <div class="page-heading"><h1>How the data works</h1><p>Reported delays, with their limits in view.</p></div>
   <h2>Every five minutes</h2>
   <p>We poll selected stations using Iarnród Éireann's <a href="https://api.irishrail.ie/realtime/realtime.asmx">public realtime API</a> every 5 minutes. Pages refresh every 60 seconds. All displayed times use Europe/Dublin, including daylight saving time.</p>
+  <p>The API gives local times without a clock-change marker. When clocks go back, a repeated time such as 01:30 is taken as the first one, before the change; if a train's expected time then reads earlier than its schedule, we note “clocks went back”. When clocks go forward, a skipped time such as 01:30 is read as 02:30.</p>
   <h2>What “late” means</h2>
   <p>The API's Late field reports delay in minutes. “On time” in the headline means early or no more than 1 minute late. Scheduled times are timetable times, using the arrival time for terminating trains.</p>
   <h2>A last reading, not a confirmed arrival</h2>
