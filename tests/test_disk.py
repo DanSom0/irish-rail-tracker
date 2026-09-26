@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import disk
+from app import disk, worker
 
 GIB = 1024 ** 3
 
@@ -39,3 +39,30 @@ def test_unreadable_disk_is_logged_not_raised(monkeypatch, caplog):
     monkeypatch.setattr(disk.shutil, "disk_usage", fail)
     assert disk.check_disk_usage() is None
     assert "disk_usage_unavailable" in caplog.text
+
+
+class FakeScheduler:
+    def __init__(self, **_kwargs):
+        pass
+
+    def add_job(self, *_args, **_kwargs):
+        pass
+
+    def start(self):
+        pass
+
+
+@pytest.mark.parametrize("used,free,warned", [(80, 20, False), (81, 19, True)])
+def test_worker_logs_disk_warning_after_each_fetch_cycle(
+    app, monkeypatch, caplog, used, free, warned,
+):
+    cycles = []
+    monkeypatch.setattr(worker, "create_app", lambda: app)
+    monkeypatch.setattr(worker, "run_fetch_cycle", cycles.append)
+    monkeypatch.setattr(worker, "BlockingScheduler", FakeScheduler)
+    monkeypatch.setattr(worker.signal, "signal", lambda *_args: None)
+    fake_usage(monkeypatch, 100, used, free)
+    worker.main()  # Runs the first fetch cycle, then the fake scheduler returns.
+    assert cycles == [app]
+    warnings = [record for record in caplog.records if record.message == "disk_usage_high"]
+    assert [record.used_percent for record in warnings] == ([81] if warned else [])
