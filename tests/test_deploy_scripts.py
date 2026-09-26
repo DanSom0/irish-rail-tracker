@@ -88,7 +88,7 @@ fi
     contents = cron.read_text()
     assert contents.startswith(original)
     assert contents.count("# irish-rail-tracker-backup") == 1
-    assert "0 3 * * * /opt/irish-rail-tracker/scripts/backup.sh" in contents
+    assert "0 3 * * * /opt/irish-rail-tracker/scripts/nightly-backup.sh #" in contents
 
 
 def test_cron_read_errors_do_not_replace_existing_jobs(deployment):
@@ -160,3 +160,81 @@ def test_healthcheck_and_rollback_fail_when_never_healthy(deployment):
     assert result.returncode != 0
     assert "endpoint did not return HTTP 200" in result.stderr
     assert "IMAGE_TAG=" + "a" * 40 in (deployment / ".env").read_text()
+
+
+@pytest.mark.parametrize("size,rotated", [(1024 * 1024, False), (1024 * 1024 + 1, True)])
+def test_nightly_backup_rotates_log_above_one_mebibyte(deployment, size, rotated):
+    (deployment / "scripts" / "backup.sh").write_text('echo "[backup] ran"; echo oops >&2\n')
+    log = deployment / "backup.log"
+    log.write_text("x" * (size - 1) + "\n")
+    (deployment / "backup.log.1").write_text("oldest\n")
+    result = run(deployment, "nightly-backup.sh")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == result.stderr == ""  # Cron output goes to the log.
+    assert log.read_text().endswith("[backup] ran\noops\n")
+    assert (log.stat().st_size < 100) == rotated
+    assert ((deployment / "backup.log.1").stat().st_size == size) == rotated
+
+
+def test_nightly_backup_starts_a_log_and_keeps_backup_status(deployment):
+    (deployment / "scripts" / "backup.sh").write_text('echo "[backup] Failed"; exit 3\n')
+    assert run(deployment, "nightly-backup.sh").returncode == 3
+    assert (deployment / "backup.log").read_text() == "[backup] Failed\n"
+
+
+RELEASES = [  # Newest first, as the retention script sorts them.
+    ("2026-09-26 03:00:00 +0000 UTC", "d" * 40),
+    ("2026-09-25 03:00:00 +0000 UTC", "latest"),
+    ("2026-09-25 03:00:00 +0000 UTC", "c" * 40),
+    ("2026-09-24 03:00:00 +0000 UTC", "b" * 40),
+    ("2026-09-23 03:00:00 +0000 UTC", "a" * 40),
+    ("2026-09-22 03:00:00 +0000 UTC", "<none>"),
+]
+
+
+def image_commands(deployment, failing=""):
+    listing = "\n".join(f"{created}\t{tag}" for created, tag in reversed(RELEASES))
+    command(deployment, "docker", f'''
+if [[ $1 == image && $2 == ls ]]; then printf '%b\\n' '{listing}'; exit; fi
+printf '%s\\n' "$*" >> "$CHECK_DIR/docker.log"
+[[ $3 != *:{failing or "never"} ]]
+''')
+
+
+def removed(deployment):
+    log = deployment / "docker.log"
+    lines = log.read_text().splitlines() if log.exists() else []
+    assert all(line.startswith("image rm ghcr.io/dansom0/irish-rail-tracker:") for line in lines)
+    return {line.rsplit(":", 1)[1] for line in lines}
+
+
+@pytest.mark.parametrize("current,kept", [
+    ("d" * 40, {"c" * 40, "b" * 40}),  # After a deploy.
+    ("a" * 40, {"d" * 40, "c" * 40}),  # After rolling back to an older release.
+])
+def test_prune_images_keeps_current_and_two_previous_releases(deployment, current, kept):
+    env = deployment / ".env"
+    env.write_text(env.read_text() + f"IMAGE_TAG={current}\n")
+    image_commands(deployment)
+    result = run(deployment, "prune-images.sh")
+    assert result.returncode == 0, result.stderr
+    releases = {tag for _, tag in RELEASES if len(tag) == 40}
+    assert removed(deployment) == (releases - kept - {current}) | {"latest"}
+    assert "Kept " + current + " and 2 previous release(s)" in result.stdout
+
+
+def test_prune_images_refuses_without_a_pinned_sha(deployment):
+    image_commands(deployment)  # The fixture's .env ends with IMAGE_TAG=latest.
+    result = run(deployment, "prune-images.sh")
+    assert result.returncode != 0
+    assert removed(deployment) == set()
+
+
+def test_prune_images_continues_after_a_failed_removal(deployment):
+    env = deployment / ".env"
+    env.write_text(env.read_text() + f"IMAGE_TAG={'d' * 40}\n")
+    image_commands(deployment, failing="latest")
+    result = run(deployment, "prune-images.sh")
+    assert result.returncode == 0  # Retention never fails a running deploy.
+    assert removed(deployment) == {"latest", "a" * 40}
+    assert "could not be removed" in result.stderr

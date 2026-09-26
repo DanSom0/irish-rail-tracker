@@ -15,6 +15,7 @@ from flask import (
 )
 from sqlalchemy import Date, DateTime, Integer, case, cast, func, text, tuple_
 
+from app.disk import check_disk_usage
 from app.extensions import db
 from app.models import Observation
 from app.stations import (
@@ -581,7 +582,8 @@ def live_map():
 @dashboard.get("/status")
 def status():
     context = _context()
-    return render_template("status.html", title="Data status", active="status", **context)
+    return render_template("status.html", title="Data status", active="status", **context,
+                           disk=check_disk_usage())
 
 
 @dashboard.app_errorhandler(404)

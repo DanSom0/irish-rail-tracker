@@ -4,6 +4,11 @@
 <div class="page-heading"><p class="eyebrow">Collection health</p><h1>Data status</h1><p>How recently each station supplied observations.</p></div>
 {{ freshness(last_updated, age_minutes) }}
 <section class="status-summary card">{{ coverage_label(coverage) }}<p class="note">Reporting means at least one reading in the last 30 minutes. Empty fetches and fetch failures are not stored, so gaps do not tell us whether services are running.</p></section>
+<section class="status-summary card" aria-labelledby="disk-heading">
+  <div class="section-heading card-heading"><h2 id="disk-heading">Server disk</h2>{% if disk and disk.high %}<span class="badge major">Above {{ disk.warning_percent }}%</span>{% endif %}</div>
+  {% if disk %}<p>{{ disk.used_percent }}% used · {{ disk.free_bytes|filesizeformat(true) }} free of {{ disk.total_bytes|filesizeformat(true) }}</p>
+  <p class="note">The database, app images and logs share this disk. Above {{ disk.warning_percent }}%, the app logs a warning on every fetch cycle.</p>{% else %}<p>Disk usage is unavailable.</p>{% endif %}
+</section>
 <section class="card" aria-labelledby="status-heading">
   <div class="section-heading card-heading"><h2 id="status-heading">Latest station update</h2><span>Alphabetical by station</span></div>
   {% if not coverage.reporting %}{{ empty_state("No monitored stations have a reading in the last 30 minutes; the times below show their last stored updates.") }}{% endif %}

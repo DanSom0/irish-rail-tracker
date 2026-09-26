@@ -7,6 +7,7 @@ import sys
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from app import create_app
+from app.disk import check_disk_usage
 from app.fetcher import run_fetch_cycle
 
 
@@ -17,6 +18,8 @@ def main() -> None:
     def fetch() -> None:
         with app.app_context():
             run_fetch_cycle(app)
+        # Logged every cycle, so a filling disk is noticed without anyone opening /status.
+        check_disk_usage()
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(

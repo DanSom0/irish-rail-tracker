@@ -36,7 +36,13 @@ CI runs on pull requests and pushes to `main`. It checks Python with Ruff, runs 
 
 After CI passes for a push to this repository's `main`, Deploy builds the tested commit. It publishes the image to GHCR with both its full commit SHA and `latest` as tags. Deploys run one at a time. You can also start Deploy manually on `main`.
 
-Deploy copies the production Compose file and scripts to the server. It downloads the SHA-tagged image, starts the services, records the full SHA as `IMAGE_TAG` in the server's `.env`, and schedules backups. Rollback records its selected SHA the same way. The public `/health` check retries for up to 60 seconds. If it does not return HTTP 200, the job fails. It does not roll back automatically, so `.env` still identifies the image running after `up -d`.
+Deploy copies the production Compose file and scripts to the server. It downloads the SHA-tagged image, starts the services, records the full SHA as `IMAGE_TAG` in the server's `.env`, and schedules backups. Rollback records its selected SHA the same way.
+
+Deploy then runs [`scripts/prune-images.sh`](../scripts/prune-images.sh). It keeps the running image and the two newest other SHA-tagged images for rollback. It removes older release images and the server's `:latest` tag, which Compose no longer uses. It never forces removal of an image a container is using. If a removal fails, the deploy continues and the deploy log says so. Each release image uses about 250 MB of disk.
+
+Each container's Docker log is capped at three 10 MB files (`json-file` driver, set in `docker-compose.prod.yml`). The limits apply once Deploy recreates the containers.
+
+The public `/health` check retries for up to 60 seconds. If it does not return HTTP 200, the job fails. It does not roll back automatically, so `.env` still identifies the image running after `up -d`.
 
 To restart services or apply configuration changes, re-run the **Deploy** workflow on `main`. Never use a bare `docker compose up -d` on the server; the workflow selects and records the deployed image.
 
@@ -51,11 +57,11 @@ cd /opt/irish-rail-tracker
 ./scripts/rollback.sh '<previous-full-commit-sha>'
 ```
 
-The script uses the saved image or downloads it, starts the services, records the selected SHA in `.env`, and checks their health. If the image is not on the server and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents in place. The next successful deploy replaces that version.
+Deploy keeps only the two releases before the current one on the server. The script uses the saved image or downloads it, starts the services, records the selected SHA in `.env`, and checks their health. If the image is not on the server and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents in place. The next successful deploy replaces that version.
 
 ## Backups
 
-Deploy schedules [`scripts/backup.sh`](../scripts/backup.sh) through cron for **03:00 each night in the server's timezone**. It uses `pg_dump` to save the database as SQL, compresses the file, and uploads it to `s3://<BACKUP_BUCKET>/backups/<UTC-timestamp>.sql.gz`. Logs go to `/opt/irish-rail-tracker/backup.log`.
+Deploy schedules [`scripts/backup.sh`](../scripts/backup.sh) through cron for **03:00 each night in the server's timezone**. It uses `pg_dump` to save the database as SQL, compresses the file, and uploads it to `s3://<BACKUP_BUCKET>/backups/<UTC-timestamp>.sql.gz`. Cron runs it through [`scripts/nightly-backup.sh`](../scripts/nightly-backup.sh), which appends the output to `/opt/irish-rail-tracker/backup.log`. Once that file is over 1 MiB, it is moved to `backup.log.1` before the next run, replacing any older copy.
 
 S3 encrypts the backups and blocks public access. Backup files expire after seven days. S3 also keeps older versions of replaced files; those expire after one day.
 
@@ -104,7 +110,9 @@ Check the dashboard and worker logs. Once the app is working, remove the tempora
 
 Set up an external uptime monitor for [the public `/health` page](http://54.228.205.197/health). It should expect HTTP 200. This checks that the web app can reach the database. It does not check whether the worker is collecting new data.
 
-Check the worker logs for `entries_parsed` (rows read for each station) and `observations_saved` (rows saved across all stations). Check `backup.log` for upload failures.
+Check the worker logs for `entries_parsed` (rows read for each station) and `observations_saved` (rows saved across all stations). Check `backup.log` (and `backup.log.1` after rotation) for upload failures.
+
+The database, release images and logs share the server's root disk. The [`/status` page](http://54.228.205.197/status) shows how much of it is used. Above 80%, the web app logs `disk_usage_high` when `/status` loads, and the worker logs it on every fetch cycle. Check the worker logs for it. The figure reads the disk from inside the container; it should match `df -h /` on the server. No observation data is ever deleted to free space.
 
 ## Environment variables
 
