@@ -5,7 +5,8 @@ set -euo pipefail
 LOG=backup.log
 MAX_BYTES=1048576
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=scripts/app-dir.sh
+source "$(dirname "${BASH_SOURCE[0]}")/app-dir.sh"
 rotated=true
 if [[ -f $LOG ]] && (( $(wc -c < "$LOG") > MAX_BYTES )); then
   mv -f "$LOG" "$LOG.1" || rotated=false
@@ -13,4 +14,4 @@ fi
 exec >> "$LOG" 2>&1
 # A rotation failure must not skip the backup itself.
 $rotated || echo "[backup] Could not rotate $LOG"
-exec ./scripts/backup.sh
+exec "$SCRIPT_DIR/backup.sh"

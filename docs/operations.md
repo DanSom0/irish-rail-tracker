@@ -36,28 +36,68 @@ CI runs on pull requests and pushes to `main`. It checks Python with Ruff, runs 
 
 After CI passes for a push to this repository's `main`, Deploy builds the tested commit. It publishes the image to GHCR with both its full commit SHA and `latest` as tags. Deploys run one at a time. You can also start Deploy manually on `main`.
 
-Deploy copies the production Compose file and scripts to the server. It downloads the SHA-tagged image, starts the services, records the full SHA as `IMAGE_TAG` in the server's `.env`, and schedules backups. Rollback records its selected SHA the same way.
+Deploy copies the commit's production Compose file and scripts to the server as a release bundle (see [Server layout](#server-layout)). It runs [`scripts/activate-release.sh`](../scripts/activate-release.sh) from that bundle, which downloads the SHA-tagged image and starts the services with the bundle's Compose file. It then checks `http://localhost/health` on the server for up to 60 seconds:
 
-Deploy then runs [`scripts/prune-images.sh`](../scripts/prune-images.sh). It keeps the running image and the two newest other SHA-tagged images for rollback. It removes older release images and the server's `:latest` tag, which Compose no longer uses. It never forces removal of an image a container is using. If a removal fails, the deploy continues and the deploy log says so. Each release image uses about 250 MB of disk.
+- **Healthy:** it records the full SHA as `IMAGE_TAG` in the server's `.env` and points `current` at the new bundle. Deploy then schedules backups.
+- **Unhealthy:** it starts the previous release again from its own bundle and image and leaves `.env` and `current` unchanged. The deploy job fails. The new bundle and image stay on the server for investigation.
+
+Deploy then runs [`scripts/prune-images.sh`](../scripts/prune-images.sh). It keeps the running image and the two newest other SHA-tagged images for rollback. It keeps the release bundles for exactly those releases and removes the others, so every kept image has its Compose file and scripts. It removes older release images and the server's `:latest` tag, which Compose no longer uses. It never forces removal of an image a container is using. If a removal fails, the deploy continues and the deploy log says so. Each release image uses about 250 MB of disk; a bundle is a few kilobytes.
 
 Each container's Docker log is capped at three 10 MB files (`json-file` driver, set in `docker-compose.prod.yml`). The limits apply once Deploy recreates the containers.
 
-The public `/health` check retries for up to 60 seconds. If it does not return HTTP 200, the job fails. It does not roll back automatically, so `.env` still identifies the image running after `up -d`.
+After the switch, the workflow checks the public `/health` page for up to 60 seconds. If it does not return HTTP 200, the job fails, but the release that passed the server-side check stays current.
 
 To restart services or apply configuration changes, re-run the **Deploy** workflow on `main`. Never use a bare `docker compose up -d` on the server; the workflow selects and records the deployed image.
 
 Web and worker share one Python 3.12 image. The worker checks stations every five minutes by default. PostgreSQL keeps one row per station, train code, and train date, updating it on each reading.
 
+## Server layout
+
+```text
+/opt/irish-rail-tracker/
+├── .env                        shared by all releases: secrets, settings and IMAGE_TAG
+├── backup.log, backup.log.1    nightly backup output
+├── releases/
+│   ├── <sha>/                  one bundle per kept release
+│   │   ├── docker-compose.prod.yml
+│   │   └── scripts/
+│   └── ...
+├── current -> releases/<sha>   the release that last passed /health
+├── docker-compose.prod.yml -> current/docker-compose.prod.yml
+└── scripts -> current/scripts
+```
+
+The server keeps the current release and the two before it, each as a bundle and an image. A release is the pair: `IMAGE_TAG` in `.env` and `current` always name the same SHA. Cron and the commands in this guide use the top-level `docker-compose.prod.yml` and `scripts` links, so they always run the current release's files.
+
+`.env` is not part of a bundle and is not versioned: it holds the database password and other settings that only exist on the server. Rollback does not change it apart from `IMAGE_TAG`. If a release needs a new setting, add it to `.env` before deploying; keep settings an older release still uses until that release can no longer be rolled back to.
+
+Servers deployed before release bundles have the Compose file and scripts as plain files at the top level. The first deploy with bundles copies those files to `releases/<running-sha>/`, the SHA in `IMAGE_TAG`, so that release can be restarted or rolled back to. Once the new release is healthy, it replaces the plain files with the links above. That older bundle's `rollback.sh` predates bundles; while it is current, roll back with a newer bundle's script: `./releases/<newer-sha>/scripts/rollback.sh '<sha>'`.
+
 ## Rollback
 
-On the server, choose a previous version that was published to GHCR. Replace the placeholder with its **full 40-character commit SHA**:
+On the server, list the releases you can roll back to. Each has a bundle and an image:
 
 ```sh
 cd /opt/irish-rail-tracker
+readlink current
+ls releases
+docker image ls ghcr.io/dansom0/irish-rail-tracker
+```
+
+Choose a previous release and replace the placeholder with its **full 40-character commit SHA**:
+
+```sh
 ./scripts/rollback.sh '<previous-full-commit-sha>'
 ```
 
-Deploy keeps only the two releases before the current one on the server. The script uses the saved image or downloads it, starts the services, records the selected SHA in `.env`, and checks their health. If the image is not on the server and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents in place. The next successful deploy replaces that version.
+The script switches the image and the release bundle together. It uses the saved image, or downloads it if it is missing, and starts the services with that bundle's Compose file. Services the other release defined but this one does not are removed. It then checks `http://localhost/health`:
+
+- **Healthy:** it records the SHA in `.env` and points `current` at the bundle. Check the dashboard and the worker logs.
+- **Unhealthy:** it restarts the release that was current and exits with an error. Nothing is switched.
+
+A release without a bundle in `releases/` cannot be rolled back to; the script stops before changing anything. If its image is missing and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents and `.env` settings in place. The next successful deploy replaces that version.
+
+If a deploy or rollback is interrupted (for example, the SSH connection drops), `current` and `.env` still name the last healthy release, but other containers may be running. Run `./scripts/rollback.sh "$(basename "$(readlink current)")"` to start that release again.
 
 ## Backups
 
