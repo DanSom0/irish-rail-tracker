@@ -24,3 +24,16 @@ def test_unset_or_empty_station_codes_uses_repo_default(override):
         env=environment, text=True,
     ).strip().split(",")
     assert actual == list(station_codes(listed.split(",")))
+
+
+def test_irish_rail_feeds_default_to_https():
+    environment = os.environ.copy()
+    environment.pop("IRISH_RAIL_API_URL", None)
+    environment.pop("IRISH_RAIL_TRAINS_API_URL", None)
+    urls = subprocess.check_output(
+        [sys.executable, "-c",
+         "from app.config import Config; print(Config.IRISH_RAIL_API_URL, Config.IRISH_RAIL_TRAINS_API_URL)"],
+        env=environment, text=True,
+    ).split()
+    assert len(urls) == 2
+    assert all(url.startswith("https://api.irishrail.ie/") for url in urls)
