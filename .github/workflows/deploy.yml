@@ -86,6 +86,9 @@ jobs:
             mv "releases/.incoming-$sha" "releases/$sha"
           fi
           echo "[deploy] Starting $sha"
+          # Migrates the schema with the new image before any container is replaced. A failed
+          # migration stops the deploy here and the running release stays active.
+          "releases/$sha/scripts/migrate.sh" "$sha"
           # Switches current to the new release only after its /health check passes.
           "releases/$sha/scripts/activate-release.sh" --pull "$sha"
           ./scripts/install-cron.sh
