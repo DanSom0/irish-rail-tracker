@@ -1,6 +1,7 @@
 """Environment-backed application configuration."""
 
 import os
+from datetime import timedelta
 
 from app.stations import station_codes
 
@@ -8,6 +9,15 @@ DEFAULT_STATION_CODES = station_codes([
     "DBATE", "MHIDE", "GRGRD", "HWTHJ", "HOWTH", "CLSLA", "MYNTH", "DCDRA", "CTARF", "CNLLY",
     "TARA", "HSTON", "PERSE", "GCDK", "LDWNE", "HZLCH", "BROCK", "DLERY", "BRAY", "GSTNS",
 ])
+
+
+def max_update_age(fetch_interval_minutes: int) -> timedelta:
+    """How old the worker's last cycle, or a station's last successful poll, may be before it
+    counts as not current: three missed polls, and never less than 15 minutes.
+
+    The one threshold for /health/ingestion readiness, stale boards and coverage.
+    """
+    return max(timedelta(minutes=15), 3 * timedelta(minutes=fetch_interval_minutes))
 
 
 class Config:

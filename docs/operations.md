@@ -150,7 +150,7 @@ The script switches the image and the release bundle together. It uses the saved
 - **Healthy:** it records the SHA in `.env` and points `current` at the bundle. Check the dashboard and the worker logs.
 - **Unhealthy:** it restarts the release that was current and exits with an error. Nothing is switched.
 
-**Ingestion readiness after a rollback:** releases before migration `0002_station_polls` do not update the worker heartbeat or station polls. After rolling back to one of them, `/health/ingestion` reports not ready: the older web app does not serve it (HTTP 404), and the heartbeat it left stops advancing, so it is more than 15 minutes old. This does not mean the older worker has stopped: check its logs instead. The readiness signal is only authoritative on releases that include `0002_station_polls`. The tables stay in place; when a newer release is deployed again, its worker records fresh polls on its first cycle.
+**Ingestion readiness after a rollback:** releases before migration `0002_station_polls` do not update the worker heartbeat or station polls. After rolling back to one of them, `/health/ingestion` reports not ready: the older web app does not serve it (HTTP 404), and the heartbeat it left stops advancing, so it passes the age limit. This does not mean the older worker has stopped: check its logs instead. The readiness signal is only authoritative on releases that include `0002_station_polls`. The tables stay in place; when a newer release is deployed again, its worker records fresh polls on its first cycle.
 
 A release without a bundle in `releases/` cannot be rolled back to; the script stops before changing anything. If its image is missing and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents, its schema and `.env` settings in place; it never runs migrations (see [Database migrations](#database-migrations)). The next successful deploy replaces that version.
 
@@ -209,14 +209,14 @@ Check the dashboard and worker logs. Once the app is working, remove the tempora
 
 Set up an external uptime monitor for [the public `/health` page](http://54.228.205.197/health). It should expect HTTP 200. This is liveness: it checks that the web app can reach the database. It does not check whether the worker is collecting new data, and deploy and rollback only gate on it.
 
-[`/health/ingestion`](http://54.228.205.197/health/ingestion) is readiness for data collection. The worker records a heartbeat each time it completes a fetch cycle, even when some station polls fail. The page returns:
+[`/health/ingestion`](http://54.228.205.197/health/ingestion) is readiness for data collection. The worker records a heartbeat each time it completes a fetch cycle, even when some station polls fail. Its age limit is three fetch intervals, and never less than 15 minutes: 15 minutes at the default `FETCH_INTERVAL_MINUTES=5`, 30 minutes at 10. The same limit decides when a station's board is marked as not current and which stations count as reporting. The page returns:
 
-- **HTTP 200** when the heartbeat is less than 15 minutes old.
-- **HTTP 503** when there is no heartbeat, or it is 15 minutes old or more: the worker is stopped, stuck or cannot write to the database. It also returns 503 if the database cannot be reached.
+- **HTTP 200** when the heartbeat is younger than the limit.
+- **HTTP 503** when there is no heartbeat, or it has reached the limit: the worker is stopped, stuck or cannot write to the database. It also returns 503 if the database cannot be reached.
 
 The JSON body gives the heartbeat time and age and counts the monitored stations by their latest poll outcome: `ok` (trains returned), `empty` (a valid board with no services, normal overnight), `error` (the poll failed) and `awaiting_first_poll` (no poll recorded yet). Station errors do not cause a 503 on their own. A fresh heartbeat proves the worker is running, not that data is arriving: if every station shows `error`, check the worker logs. A second monitor on this page should expect HTTP 200.
 
-Each station's latest poll is also on the [`/status` page](http://54.228.205.197/status): "OK, N trains", "No services returned", "Update failed; showing data from HH:MM" (the last successful board stays visible, marked as not current) or "Awaiting first poll". A board is also marked as not current when its last successful poll is 15 minutes old or more.
+Each station's latest poll is also on the [`/status` page](http://54.228.205.197/status): "OK, N trains", "No services returned", "Update failed; showing data from HH:MM" (the last successful board stays visible, marked as not current) or "Awaiting first poll". A board is also marked as not current when its last successful poll has reached the age limit. Stations whose latest poll failed are left out of the dashboard's current network figures (on-time share, average delay, delayed trains, current delays); the dashboard shows "N stations not updating; excluded", and each station's own page still shows its last board.
 
 Check the worker logs for:
 

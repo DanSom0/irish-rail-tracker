@@ -1269,3 +1269,33 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
     client.get("/patterns?station=INVALID")
     assert context["station"] == ""  # Existing query-filter behaviour: reset to all monitored.
     assert context["cells"][(2, 9)].readings == 1
+
+
+def test_failed_stations_are_excluded_from_current_network_figures_but_keep_their_board(
+    client, dashboard_data, record_poll,
+):
+    seed, context = dashboard_data
+    seed({"train_code": "OK1", "delay_minutes": 2},
+         {"station": "TARA", "train_code": "FAILED1", "delay_minutes": 20},
+         {"station": "PERSE", "train_code": "FAILED2", "delay_minutes": 9})
+    record_poll("TARA", "error")
+    record_poll("PERSE", "error")
+
+    home = client.get("/").get_data(as_text=True)
+    network = context["network"]
+    assert (network["trains"], network["average_delay"], network["major"]) == (1, 2, 0)
+    assert (network["readings"], network["reporting"], network["excluded"]) == (1, 1, 2)
+    assert network["stale"] == 0  # Excluded stations are reported once, as excluded.
+    assert context["highest_delay"].station == "CNLLY"
+    assert [row.train_code for row in context["current_delays"]] == ["OK1"]
+    assert "2 stations not updating; excluded" in home and "FAILED1" not in home
+
+    client.get("/?station=TARA")
+    assert (context["network"]["trains"], context["network"]["excluded"]) == (0, 1)
+    assert context["current_delays"] == []
+    assert "1 station not updating; excluded" in client.get("/?station=TARA").get_data(as_text=True)
+
+    for view in ("next", "delays"):
+        board = client.get(f"/stations/TARA?view={view}").get_data(as_text=True)
+        assert "Update failed; showing data from" in board
+    assert [row.train_code for row in context["pagination"]["items"]] == ["FAILED1"]

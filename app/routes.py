@@ -15,6 +15,7 @@ from flask import (
 )
 from sqlalchemy import Date, DateTime, Integer, case, cast, func, text, tuple_
 
+from app.config import max_update_age
 from app.disk import check_disk_usage
 from app.extensions import db
 from app.models import Observation, StationPoll, WorkerHeartbeat
@@ -30,10 +31,6 @@ from app.train_positions import current_trains
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
-# A station's board is stale once its latest successful poll is this old, or its last poll failed.
-STALE_AFTER = timedelta(minutes=15)
-# /health/ingestion is ready while the worker completed a cycle within this time.
-HEARTBEAT_MAX_AGE = timedelta(minutes=15)
 
 
 @dashboard.app_template_filter("station_name")
@@ -182,6 +179,15 @@ def health():
     return jsonify(status="ok", database="connected")
 
 
+def _max_update_age():
+    return max_update_age(current_app.config["FETCH_INTERVAL_MINUTES"])
+
+
+@dashboard.app_template_global("max_update_minutes")
+def max_update_minutes():
+    return int(_max_update_age().total_seconds() // 60)
+
+
 @dashboard.get("/health/ingestion")
 def ingestion_health():
     """Readiness of data collection: 503 unless the worker completed a cycle recently.
@@ -200,13 +206,14 @@ def ingestion_health():
     stations = {"ok": 0, "empty": 0, "error": 0, "awaiting_first_poll": 0}
     for poll in polls.values():
         stations[poll["outcome"]] += 1
-    ready = completed_at is not None and now - completed_at < HEARTBEAT_MAX_AGE
+    max_age = _max_update_age()
+    ready = completed_at is not None and now - completed_at < max_age
     body = {
         "status": "ok" if ready else "not ready",
         "heartbeat": {
             "last_cycle_completed_at": completed_at.isoformat() if completed_at else None,
             "age_seconds": max(0, int((now - completed_at).total_seconds())) if completed_at else None,
-            "max_age_seconds": int(HEARTBEAT_MAX_AGE.total_seconds()),
+            "max_age_seconds": int(max_age.total_seconds()),
         },
         "stations": stations,
     }
@@ -225,11 +232,18 @@ def _observations():
                Observation.fetched_at.desc(), Observation.id.desc()).subquery().c
 
 
-def _successful_polls(monitored_stations):
-    """Each monitored station's latest successful poll."""
-    return db.select(StationPoll.station_code, StationPoll.succeeded_at).where(
+def _successful_polls(monitored_stations, *, include_failed=True):
+    """Each monitored station's latest successful poll.
+
+    Network figures pass include_failed=False: a station whose latest poll failed keeps its
+    stale board on its own page but is left out of "right now" aggregates.
+    """
+    query = db.select(StationPoll.station_code, StationPoll.succeeded_at).where(
         StationPoll.station_code.in_(monitored_stations), StationPoll.succeeded_at.is_not(None),
-    ).subquery()
+    )
+    if not include_failed:
+        query = query.where(StationPoll.outcome != "error")
+    return query.subquery()
 
 
 def _current_station_poll(observations, polls):
@@ -244,6 +258,7 @@ def _poll_states(monitored_stations, now):
     polls = {poll.station_code: poll for poll in db.session.scalars(
         db.select(StationPoll).where(StationPoll.station_code.in_(monitored_stations))
     )}
+    max_age = _max_update_age()
     states = {}
     for code in monitored_stations:
         poll = polls.get(code)
@@ -256,7 +271,7 @@ def _poll_states(monitored_stations, now):
             "error_reason": poll.error_reason if poll else None,
             # Data from an earlier successful poll is shown, but marked as not current.
             "stale": succeeded_at is not None and (
-                poll.outcome == "error" or now - succeeded_at >= STALE_AFTER
+                poll.outcome == "error" or now - succeeded_at >= max_age
             ),
         }
     return states
@@ -386,11 +401,13 @@ def _context(station="", *, strict=False):
     selected = [row for row in rows if row.station == station] if station else [
         row for row in rows if row.station in configured
     ]
-    readings = sum(row.current_readings for row in selected)
-    active = [row for row in selected if row.current_readings]
-    highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     # Monitored boards are as fresh as their latest successful poll, even an empty one.
     scope = [station] if station in configured else [] if station else monitored_stations
+    # Stations whose latest poll failed stay out of the "right now" network figures.
+    failed = {code for code in scope if poll_states[code]["outcome"] == "error"}
+    active = [row for row in selected if row.current_readings and row.station not in failed]
+    readings = sum(row.current_readings for row in active)
+    highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max(
         (poll_states[code]["succeeded_at"] for code in scope if poll_states[code]["succeeded_at"]),
         default=None,
@@ -424,7 +441,8 @@ def _context(station="", *, strict=False):
             "readings": readings,
             "reporting": len(active) if not station or station in configured else 0,
             "total": int(station in configured) if station else len(configured),
-            "stale": sum(poll_states[code]["stale"] for code in scope),
+            "excluded": len(failed),
+            "stale": sum(poll_states[code]["stale"] for code in scope if code not in failed),
         },
         "station_poll": poll_states.get(station),
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
@@ -439,12 +457,16 @@ def _context(station="", *, strict=False):
     return context
 
 
-def _latest_readings(context, *, recent=False):
-    """One latest stored station reading per train/date, within the selected scope."""
+def _latest_readings(context, *, recent=False, include_failed=False):
+    """One latest stored station reading per train/date, within the selected scope.
+
+    Current readings leave out stations whose latest poll failed, unless include_failed
+    (a station's own board, shown as stale).
+    """
     observations = _observations()
     query = db.select(*observations)
     if recent:
-        polls = _successful_polls(context["monitored_stations"])
+        polls = _successful_polls(context["monitored_stations"], include_failed=include_failed)
         query = query.join(polls, _current_station_poll(observations, polls))
     else:
         query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
@@ -469,8 +491,8 @@ def _train_summary(context, *, recent=False):
     )).one()
 
 
-def _services(context, *, significant=False):
-    latest = _latest_readings(context, recent=True).c
+def _services(context, *, significant=False, include_failed=False):
+    latest = _latest_readings(context, recent=True, include_failed=include_failed).c
     query = db.select(*latest)
     if significant:
         query = query.where(latest.delay_minutes >= 2)
@@ -481,7 +503,7 @@ def _services(context, *, significant=False):
 
 def _next_services(context):
     """Current services not yet expected, ordered with the same conversion as the board."""
-    latest = _latest_readings(context, recent=True).c
+    latest = _latest_readings(context, recent=True, include_failed=True).c
     # Stored times can include arrivals; only valid local schedules support this view.
     rows = db.session.execute(db.select(*latest).where(
         latest.scheduled_time.op("~")(r"^([01][0-9]|2[0-3]):[0-5][0-9]$"),
@@ -564,7 +586,7 @@ def station_detail(code):
     context = _context(code, strict=True)
     view = "next" if request.args.get("view", "next") == "next" else "delays"
     pagination = (_paginate_rows(_next_services(context)) if view == "next"
-                  else _paginate(_services(context)))
+                  else _paginate(_services(context, include_failed=True)))
     return render_template(
         "station.html", title=station_name(code), active="stations", **context,
         summary=_train_summary(context), pagination=pagination, view=view,

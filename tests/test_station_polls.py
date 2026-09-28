@@ -11,6 +11,7 @@ import requests
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app import fetcher, routes
+from app.config import max_update_age
 from app.extensions import db
 from app.models import Observation, StationPoll, WorkerHeartbeat
 
@@ -344,3 +345,41 @@ def test_a_successful_board_goes_stale_when_the_worker_stops_polling(app, client
     assert poll["stale"] is True
     assert poll["text"] == f"OK, 2 trains; not updated since {old.astimezone(routes.DUBLIN):%H:%M}"
     assert _current(client) == ["A123", "T456"]
+
+
+@pytest.mark.parametrize("interval,limit", [(1, 15), (5, 15), (10, 30), (20, 60)])
+def test_max_update_age_is_three_intervals_but_at_least_fifteen_minutes(interval, limit):
+    assert max_update_age(interval) == timedelta(minutes=limit)
+
+
+@pytest.mark.parametrize("age,status", [(timedelta(minutes=20), 200), (timedelta(minutes=29, seconds=50), 200),
+                                        (timedelta(minutes=30), 503)])
+def test_a_longer_fetch_interval_extends_readiness(app, client, monitored, monkeypatch, age, status):
+    monkeypatch.setitem(app.config, "FETCH_INTERVAL_MINUTES", 10)
+    _set_heartbeat(app, age)
+    response = client.get("/health/ingestion")
+    assert response.status_code == status
+    assert response.get_json()["heartbeat"]["max_age_seconds"] == 1800
+
+
+def test_a_longer_fetch_interval_extends_board_freshness_and_coverage(app, client, api, monitored, monkeypatch):
+    monkeypatch.setitem(app.config, "FETCH_INTERVAL_MINUTES", 10)
+    api["CNLLY"] = BOARD
+    _poll(app)
+
+    def age_board(minutes):
+        with app.app_context():
+            old = datetime.now(UTC) - timedelta(minutes=minutes)
+            db.session.execute(db.update(Observation).values(fetched_at=old))
+            record = db.session.get(StationPoll, "CNLLY")
+            record.attempted_at = record.succeeded_at = old
+            db.session.commit()
+
+    age_board(20)  # Stale at the default 15 minutes, but within three 10-minute polls.
+    assert _network(client)["poll"]["stale"] is False
+    status = client.get("/status").get_data(as_text=True)
+    assert "succeeded in the last 30 minutes" in status
+    assert "1/2 stations reporting" in client.get("/").get_data(as_text=True)
+    age_board(30)
+    assert _network(client)["poll"]["stale"] is True
+    assert "0/2 stations reporting" in client.get("/").get_data(as_text=True)
