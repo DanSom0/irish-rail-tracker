@@ -20,7 +20,7 @@
     <button type="button" id="map-reset" class="map-reset" hidden>Reset view</button>
   </form>
   <label class="map-toggle" id="train-toggle" hidden><input type="checkbox" id="map-show-trains" checked> Show trains on map</label>
-  <p class="freshness" id="map-freshness">Showing station updates from the last 10 minutes{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% endif %}</p>
+  <p class="freshness" id="map-freshness">Showing each station’s latest successful update{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% endif %}</p>
   <p class="map-error" id="map-error" role="status" hidden>Couldn't refresh — showing earlier readings.</p>
   <p class="freshness" id="train-freshness" hidden></p>
   <p class="map-error" id="train-error" role="status" hidden></p>

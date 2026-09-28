@@ -3,11 +3,14 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 import requests
 
-from app.fetcher import fetch_station, parse_station_data
+from app.fetcher import StationPollError, fetch_station, parse_station_data
 
 FIXTURES = Path(__file__).parent / "fixtures"
+EMPTY_BOARD = (b'<?xml version="1.0" encoding="utf-8"?>'
+               b'<ArrayOfObjStationData xmlns="http://api.irishrail.ie/realtime/" />')
 
 
 def _observations():
@@ -41,25 +44,45 @@ def test_parse_station_data_uses_arrival_for_terminating_train():
     assert _observations()[1]["scheduled_time"] == "10:30"
 
 
-def test_fetch_station_returns_no_rows_for_empty_response(monkeypatch):
-    """Empty API responses do not raise or create observations."""
+def test_parse_station_data_returns_no_rows_for_a_valid_empty_board():
+    """A well-formed board with no services is a successful, empty result."""
+    assert parse_station_data(EMPTY_BOARD, "CNLLY") == []
+
+
+def test_parse_station_data_rejects_malformed_xml():
+    """Malformed XML is a failed poll, never an empty board."""
+    with pytest.raises(StationPollError, match="^invalid XML$"):
+        parse_station_data(b"<not-valid-xml", "CNLLY")
+
+
+def test_parse_station_data_rejects_a_document_that_is_not_a_station_board():
+    """Well-formed XML of another kind (an error page, say) does not clear the board."""
+    with pytest.raises(StationPollError, match="^unexpected XML document$"):
+        parse_station_data(b"<html><body>Service unavailable</body></html>", "CNLLY")
+
+
+def test_fetch_station_rejects_an_empty_response_body(monkeypatch):
+    """An empty body is a failure; only a valid empty board clears the station."""
     response = Mock(content=b"   \n")
     monkeypatch.setattr("app.fetcher.requests.get", Mock(return_value=response))
 
-    assert fetch_station("CNLLY", "https://example.test", 1) == []
+    with pytest.raises(StationPollError, match="^empty response body$"):
+        fetch_station("CNLLY", "https://example.test", 1)
     response.raise_for_status.assert_called_once_with()
 
 
-def test_parse_station_data_returns_no_rows_for_malformed_xml():
-    """Malformed XML is logged and ignored rather than escaping the worker."""
-    assert parse_station_data(b"<not-valid-xml", "CNLLY") == []
+@pytest.mark.parametrize("error,reason", [
+    (requests.Timeout("Read timed out: https://example.test/?StationCode=CNLLY"), "request timed out"),
+    (requests.ConnectionError("https://example.test/?StationCode=CNLLY refused"), "connection error"),
+    (requests.HTTPError("503 for url: https://example.test/?StationCode=CNLLY",
+                        response=Mock(status_code=503)), "HTTP 503"),
+    (requests.TooManyRedirects("https://example.test/?StationCode=CNLLY"), "request failed"),
+])
+def test_fetch_station_request_failures_have_short_sanitised_reasons(monkeypatch, error, reason):
+    """Reasons are fixed labels: the request URL and its parameters never reach them."""
+    monkeypatch.setattr("app.fetcher.requests.get", Mock(side_effect=error))
 
-
-def test_fetch_station_logs_timeout_without_raising(monkeypatch, caplog):
-    """A request timeout is logged and converted into an empty station result."""
-    monkeypatch.setattr(
-        "app.fetcher.requests.get", Mock(side_effect=requests.Timeout("request timed out"))
-    )
-
-    assert fetch_station("CNLLY", "https://example.test", 1) == []
-    assert "station API request failed" in caplog.text
+    with pytest.raises(StationPollError) as raised:
+        fetch_station("CNLLY", "https://example.test", 1)
+    assert raised.value.reason == reason
+    assert raised.value.__cause__ is None

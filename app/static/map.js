@@ -280,7 +280,7 @@
   resetButton.addEventListener('click', () => { fit(); if (!panel.hidden) close(); });
   function renderStationFreshness(failed) {
     freshness.replaceChildren();
-    freshness.append('Showing station updates from the last 10 minutes');
+    freshness.append('Showing each station’s latest successful update');
     if (stationsUpdatedAt) { freshness.append(' · '); time(freshness, stationsUpdatedAt); }
     error.hidden = !failed;
     if (failed) {

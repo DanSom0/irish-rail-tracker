@@ -1,4 +1,4 @@
-"""Seed fresh station observations into a disposable review database.
+"""Seed fresh station observations and their polls into a disposable review database.
 
 Refuses any database whose name does not end in ``_review`` so it cannot touch
 the normal local volume or production.
@@ -14,7 +14,7 @@ from sqlalchemy.engine import make_url
 from app import create_app
 from app.config import DEFAULT_STATION_CODES, Config
 from app.extensions import db
-from app.models import Observation
+from app.models import Observation, StationPoll
 
 NO_DATA_STATION = "GSTNS"
 
@@ -28,9 +28,13 @@ def main() -> None:
     rng = random.Random(4)
     with app.app_context():
         db.session.execute(delete(Observation))
+        db.session.execute(delete(StationPoll))
+        polled_at = now - timedelta(minutes=1)
         for index, station in enumerate(DEFAULT_STATION_CODES):
             if station == NO_DATA_STATION:
-                continue
+                continue  # No poll record: awaiting its first poll.
+            db.session.add(StationPoll(station_code=station, attempted_at=polled_at,
+                                       succeeded_at=polled_at, outcome="ok", train_count=3))
             for n in range(3):
                 db.session.add(Observation(
                     station=station,
@@ -40,7 +44,7 @@ def main() -> None:
                     destination="Bray",
                     scheduled_time=(now + timedelta(minutes=5 + n * 10)).strftime("%H:%M"),
                     delay_minutes=rng.choice([0, 0, 1, 3, 4, 8, 12]),
-                    fetched_at=now - timedelta(minutes=1),
+                    fetched_at=polled_at,
                 ))
         db.session.commit()
         print(f"seeded {db.session.query(Observation).count()} observations into {database}")

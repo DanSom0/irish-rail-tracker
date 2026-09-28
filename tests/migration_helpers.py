@@ -88,9 +88,9 @@ def revision(url):
 
 
 def create_all(url):
-    """Build the schema the way the app did before migrations."""
+    """Build the schema the way the app did before migrations: observations only."""
     engine = create_engine(url, poolclass=NullPool)
-    db.Model.metadata.create_all(engine)
+    db.Model.metadata.create_all(engine, tables=[db.Model.metadata.tables["observations"]])
     engine.dispose()
 
 

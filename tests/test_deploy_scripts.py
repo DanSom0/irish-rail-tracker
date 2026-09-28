@@ -431,7 +431,7 @@ def test_migrate_upgrades_a_new_database_and_logs_both_revisions(database_server
     result = run(server, f"releases/{NEW}/scripts/migrate.sh", NEW)
     assert result.returncode == 0, result.stderr
     assert "[migrate] Revision before: none" in result.stdout
-    assert f"[migrate] Revision after: {BASELINE} (head)" in result.stdout
+    assert f"[migrate] Revision after: {head()} (head)" in result.stdout
     assert revision(url) == head()
     compose = f"{NEW} compose --env-file .env -f releases/{NEW}/docker-compose.prod.yml"
     assert docker_calls(server) == [
@@ -473,7 +473,8 @@ def test_stamp_then_migrate_keeps_the_existing_schema_and_data(database_server, 
     assert revision(url) == BASELINE
     result = run(server, f"releases/{NEW}/scripts/migrate.sh", NEW)
     assert result.returncode == 0, result.stderr
-    assert f"[migrate] Revision before: {BASELINE} (head)" in result.stdout
+    assert f"[migrate] Revision before: {BASELINE}\n" in result.stdout
+    assert f"[migrate] Revision after: {head()} (head)" in result.stdout
     assert not any(" pull " in call for call in docker_calls(server))  # The image was cached.
     assert sql(url, "SELECT train_code FROM observations") == [("E101",)]
     fresh = scratch_database("fresh_deploy")
