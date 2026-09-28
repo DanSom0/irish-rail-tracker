@@ -45,7 +45,26 @@ Deploy then runs [`scripts/prune-images.sh`](../scripts/prune-images.sh). It kee
 
 Each container's Docker log is capped at three 10 MB files (`json-file` driver, set in `docker-compose.prod.yml`). The limits apply once Deploy recreates the containers.
 
-After the switch, the workflow checks the public `/health` page for up to 60 seconds. If it does not return HTTP 200, the job fails, but the release that passed the server-side check stays current.
+The deploy job keeps the server's output. It fails unless that output ends activation with `[release] Healthy; current is <sha>` for the SHA being deployed. A deploy that stops early for any other reason therefore fails too, even if every command it ran succeeded.
+
+After the switch, the workflow checks the public `/health` page for up to 60 seconds. It needs HTTP 200 and `"release"` equal to the deployed SHA; a healthy older release does not pass. If the check fails, the job fails, but the release that passed the server-side check stays current.
+
+`/health` reports the running release as `"release"`: the full commit SHA that production Compose passes to the web container from `IMAGE_TAG`. Releases before this field report no `release`, and a local stack reports `null`.
+
+### Checking a deploy
+
+These checks only read. Replace `<sha>` with the deployed commit's full SHA.
+
+1. In the deploy log, the **Pull and start release** step shows `[migrate] Revision after: <revision> (head)`, then `[release] Healthy; current is <sha>`, then `[cron] Backup scheduled` and `[images] Kept <sha>`.
+2. The public health check reports the deployed release:
+
+   ```sh
+   curl -s -w ' %{http_code}\n' http://54.228.205.197/health
+   ```
+
+   Expect `{"database":"connected","release":"<sha>","status":"ok"}` with HTTP 200. Any other `release` means another release is serving: the deploy did not activate.
+3. `/health/ingestion` returns HTTP 200 after the first fetch cycle (see [Monitoring](#monitoring)).
+4. On the server, `readlink current` prints `releases/<sha>`, and `grep '^IMAGE_TAG=' .env` prints the same SHA.
 
 To restart services or apply configuration changes, re-run the **Deploy** workflow on `main`. Never use a bare `docker compose up -d` on the server; the workflow selects and records the deployed image.
 
@@ -100,7 +119,7 @@ Do this **before merging the pull request that adds migrations**, in this order.
 
    It prints `[stamp] Stamped 0001_baseline`, and the query shows `0001_baseline`. The running release keeps working: its `create_all` only creates missing tables and ignores `alembic_version`.
 
-3. **Merge the pull request.** Deploy runs after CI. In the deploy log, check `[migrate] Revision before: 0001_baseline (head)` and the same revision after it: no migration ran. Then check `/health` and the worker logs.
+3. **Merge the pull request.** Deploy runs after CI. In the deploy log, check `[migrate] Revision before: 0001_baseline (head)` and the same revision after it: no migration ran. Then follow [Checking a deploy](#checking-a-deploy) and check the worker logs.
 
 If the deploy stops with `no Alembic revision`, the stamp was not done. Nothing was changed: do step 2, then re-run the **Deploy** workflow on `main`.
 
@@ -147,7 +166,7 @@ Choose a previous release and replace the placeholder with its **full 40-charact
 
 The script switches the image and the release bundle together. It uses the saved image, or downloads it if it is missing, and starts the services with that bundle's Compose file. Services the other release defined but this one does not are removed. It then checks `http://localhost/health`:
 
-- **Healthy:** it records the SHA in `.env` and points `current` at the bundle. Check the dashboard and the worker logs.
+- **Healthy:** it records the SHA in `.env` and points `current` at the bundle. Check that `/health` reports that SHA as `release` (releases before the field report none), then the dashboard and the worker logs.
 - **Unhealthy:** it restarts the release that was current and exits with an error. Nothing is switched.
 
 **Ingestion readiness after a rollback:** releases before migration `0002_station_polls` do not update the worker heartbeat or station polls. After rolling back to one of them, `/health/ingestion` reports not ready: the older web app does not serve it (HTTP 404), and the heartbeat it left stops advancing, so it passes the age limit. This does not mean the older worker has stopped: check its logs instead. The readiness signal is only authoritative on releases that include `0002_station_polls`. The tables stay in place; when a newer release is deployed again, its worker records fresh polls on its first cycle.

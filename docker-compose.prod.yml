@@ -31,6 +31,8 @@ services:
     environment:
       STATION_CODES:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@db:5432/${POSTGRES_DB:?}
+      # Reported by /health so deploy can confirm which release is serving.
+      RELEASE_SHA: ${IMAGE_TAG:-}
     ports:
       - "80:8000"
     depends_on:

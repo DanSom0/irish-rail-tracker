@@ -73,30 +73,42 @@ jobs:
           printf '%s' "$GH_TOKEN" | ssh -i ~/.ssh/deploy_key \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" \
             "docker login ghcr.io --username '$GITHUB_ACTOR' --password-stdin"
+          # The remote log is kept: the deploy only counts once activation reports this SHA.
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$EC2_USER@$EC2_HOST" "bash -s -- '$DEPLOY_SHA'" <<'REMOTE'
+            "$EC2_USER@$EC2_HOST" "bash -s -- '$DEPLOY_SHA'" <<'REMOTE' 2>&1 | tee "$RUNNER_TEMP/release.log"
           set -euo pipefail
-          cd /opt/irish-rail-tracker
-          trap 'docker logout ghcr.io > /dev/null' EXIT
-          sha="$1"
-          # A bundle is complete once moved into place; one commit always has the same files.
-          if [[ -d "releases/$sha" ]]; then
-            rm -rf "releases/.incoming-$sha"
-          else
-            mv "releases/.incoming-$sha" "releases/$sha"
-          fi
-          echo "[deploy] Starting $sha"
-          # Migrates the schema with the new image before any container is replaced. A failed
-          # migration stops the deploy here and the running release stays active.
-          "releases/$sha/scripts/migrate.sh" "$sha"
-          # Switches current to the new release only after its /health check passes.
-          "releases/$sha/scripts/activate-release.sh" --pull "$sha"
-          ./scripts/install-cron.sh
-          ./scripts/prune-images.sh
-          docker image prune -f
+          # The whole script is one function, which bash reads in full before running it. A
+          # command that reads stdin (as `docker compose run` does) then cannot consume the
+          # rest of the script, which once ended deploys early with success after migrating.
+          deploy() {
+            cd "${APP_DIR:-/opt/irish-rail-tracker}"
+            trap 'docker logout ghcr.io > /dev/null' EXIT
+            local sha="$1"
+            # A bundle is complete once moved into place; one commit always has the same files.
+            if [[ -d "releases/$sha" ]]; then
+              rm -rf "releases/.incoming-$sha"
+            else
+              mv "releases/.incoming-$sha" "releases/$sha"
+            fi
+            echo "[deploy] Starting $sha"
+            # Migrates the schema with the new image before any container is replaced. A failed
+            # migration stops the deploy here and the running release stays active.
+            "releases/$sha/scripts/migrate.sh" "$sha"
+            # Switches current to the new release only after its /health check passes.
+            "releases/$sha/scripts/activate-release.sh" --pull "$sha"
+            ./scripts/install-cron.sh
+            ./scripts/prune-images.sh
+            docker image prune -f
+          }
+          deploy "$@"
           REMOTE
+          if ! grep -Fxq "[release] Healthy; current is $DEPLOY_SHA" "$RUNNER_TEMP/release.log"; then
+            echo "::error::The server did not report $DEPLOY_SHA as the healthy current release"
+            exit 1
+          fi
       - name: Check public health endpoint
-        run: ./scripts/healthcheck.sh "http://$EC2_HOST/health"
+        # HTTP 200 alone would also pass while an older release keeps running.
+        run: ./scripts/healthcheck.sh --release "$DEPLOY_SHA" "http://$EC2_HOST/health"
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/deploy_key
