@@ -1,4 +1,4 @@
-"""Irish Rail delay tracker application."""
+"""Dublin Rail Tracker application."""
 
 from flask import Flask
 

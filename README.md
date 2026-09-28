@@ -1,8 +1,8 @@
-# Irish Rail Delay Tracker
+# Dublin Rail Tracker
 
 [![CI](https://github.com/DanSom0/irish-rail-tracker/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DanSom0/irish-rail-tracker/actions/workflows/ci.yml) [![Deploy](https://github.com/DanSom0/irish-rail-tracker/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/DanSom0/irish-rail-tracker/actions/workflows/deploy.yml)
 
-A live dashboard of train delays at 20 Dublin-area stations, built from Irish Rail's public realtime feed. It is a small service run like a production one. Terraform builds the infrastructure, CI tests every change, and deploys are SHA-pinned, migrated and health-gated. It has nightly backups, health and ingestion checks, and written postmortems for real incidents.
+Dublin Rail Tracker is a live dashboard of train delays at 20 Dublin-area stations, built from Irish Rail's public realtime feed. It is an independent project, not affiliated with Iarnród Éireann. It is a small service run like a production one. Terraform builds the infrastructure, CI tests every change, and deploys are SHA-pinned, migrated and health-gated. It has nightly backups, health and ingestion checks, and written postmortems for real incidents.
 
 **[Live app: https://dublinrailtracker.duckdns.org](https://dublinrailtracker.duckdns.org)** · [Operations runbook](docs/operations.md)
 

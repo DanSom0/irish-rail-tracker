@@ -1,4 +1,4 @@
-# Irish Rail Delay Tracker: Spec
+# Dublin Rail Tracker: Spec
 
 Portfolio project for SRE/DevOps internships. The repo itself (structure,
 commits, PRs, Actions, README) should look like a professional engineer's.

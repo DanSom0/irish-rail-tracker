@@ -512,7 +512,7 @@ def test_each_page_renders_with_title_navigation_and_refresh(
     response = client.get(path)
     page = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert f"<title>{title} · Irish Rail Delay Tracker</title>" in page
+    assert f"<title>{title} · Dublin Rail Tracker</title>" in page
     if active:
         assert f'aria-current="page">{active}</a>' in page
     assert '<meta http-equiv="refresh" content="60">' in page
@@ -525,7 +525,7 @@ def test_unknown_pages_are_styled_404s(client, dashboard_data, path):
     response = client.get(path)
     page = response.get_data(as_text=True)
     assert response.status_code == 404
-    assert "Page not found · Irish Rail Delay Tracker" in page
+    assert "Page not found · Dublin Rail Tracker" in page
     assert 'style.css' in page and 'Browse stations' in page
     assert 'href="/"' in page
 
@@ -712,7 +712,9 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     for code in ("PERSE", "TARA", "HSTON", "GCDK"):
         assert f'<a href="/stations/{code}">{routes.STATION_NAMES[code]}</a>' not in page
     assert "Check your station&#39;s" in page or "Check your station's" in page
-    assert 'Independent project, not affiliated with Iarnród Éireann' in page
+    assert 'Dublin Rail Tracker is an independent project, not affiliated with Iarnród Éireann' in page
+    assert '<span>Dublin Rail <span class="wordmark-light">Tracker</span></span>' in page
+    assert 'Irish Rail Delay Tracker' not in page
     assert 'Daniel English' in page
     assert page.index('Report a problem') > page.index('<footer')
     assert 'href="/about/data"' in page

@@ -1,7 +1,7 @@
 # Agent guide
 
-Irish Rail delay tracker: Python 3.12, Flask, PostgreSQL 16, and an APScheduler
-worker. This project demonstrates SRE/DevOps practice. Read SPEC.md for scope.
+Dublin Rail Tracker, a delay tracker for Irish Rail trains: Python 3.12, Flask,
+PostgreSQL 16, and an APScheduler worker. This project demonstrates SRE/DevOps practice. Read SPEC.md for scope.
 
 ## Layout
 
