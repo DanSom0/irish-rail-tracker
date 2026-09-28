@@ -36,11 +36,13 @@ docker compose up --build
 
 Open [localhost:8000](http://localhost:8000). The worker calls the live API. See [AGENTS.md](AGENTS.md) for tests and local checks.
 
+A local database created before migrations has tables but no Alembic revision, so `migrate` stops. Keep its data with `docker compose run --rm migrate alembic stamp 0001_baseline`, or start again with `docker compose down -v`.
+
 ## CI/CD
 
 1. Run Ruff, pytest against Postgres, Terraform checks, and a Docker build.
 2. After checks pass on `main`, publish the tested commit's image to GitHub's image registry (GHCR), tagged with its commit ID (SHA).
-3. Copy that commit's Compose file and scripts to the server as a release bundle; EC2 downloads the image and starts the services with Compose.
+3. Copy that commit's Compose file and scripts to the server as a release bundle. EC2 downloads the image and runs `alembic upgrade head` in a one-off container; if the migration fails, the deploy stops and the running release stays up. It then starts the services with Compose.
 4. Check `/health` for HTTP 200 for up to 60 seconds. If it fails, the previous release is restarted and the deploy job fails; a later rollback is manual.
 
 ## Design decisions
@@ -50,6 +52,7 @@ Open [localhost:8000](http://localhost:8000). The worker calls the live API. See
 - **SSH:** port 22 is open with key-only login because GitHub runner IPs are not fixed. AWS SSM is a future improvement.
 - **AWS access:** the server's AWS role only allows writes (`PutObject`) to `backups/` in its backup bucket. No AWS keys are stored on the server.
 - **Image tags:** each deployed image uses its commit SHA, so the running version is known.
+- **Migrations:** Alembic migrations run before the new release starts. They are forward-only and must work with the previous release, so rollback never touches the schema.
 - **Delay:** the last reading before a train leaves the board, not a confirmed final arrival delay.
 
 ## Postmortems

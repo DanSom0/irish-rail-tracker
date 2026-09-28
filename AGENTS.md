@@ -6,15 +6,17 @@ worker. This project demonstrates SRE/DevOps practice. Read SPEC.md for scope.
 ## Layout
 
 - `app/`: configuration, XML fetcher, models, routes, templates, and worker.
+- `migrations/`: Alembic environment and revisions (`alembic.ini` at the root); they own the schema.
 - `tests/`: pytest checks and recorded XML; never call the live API in tests.
 - `infra/`: Terraform for EC2, S3 backups, IAM, and a billing alarm.
-- `scripts/`: deploy health check, rollback, backup, and cron installation.
+- `scripts/`: deploy migration, health check, rollback, backup, baseline stamp, and cron installation.
 - `.github/workflows/`: CI and production deployment; `docs/postmortems/`: incidents.
 - `docker-compose.yml`: local stack; `docker-compose.prod.yml`: SHA-tagged GHCR images.
 
 ## Run locally
 
-Copy `.env.example` to `.env` if absent, then `docker compose up --build`.
+Copy `.env.example` to `.env` if absent, then `docker compose up --build`; the `migrate` service
+runs `alembic upgrade head` before web and worker start.
 Dashboard: http://localhost:8000; health: http://localhost:8000/health.
 
 ## Checks
@@ -32,7 +34,8 @@ ruff check .
 docker stop irishrail-test-postgres
 ```
 
-Tests delete observations and drop the schema: use only the throwaway database.
+Tests migrate the test database with Alembic, delete observations, drop the schema, and
+create and drop scratch databases beside it (`irishrail_test_*`): use only the throwaway server.
 After changing the live map's JavaScript, template or styles, run the browser review in
 [tests/browser/README.md](tests/browser/README.md); it is manual, not part of CI.
 Deployment tests mock Docker, curl, and cron; they do not verify real image tags.
@@ -44,12 +47,29 @@ terraform -chdir=infra init -backend=false
 terraform -chdir=infra validate
 ```
 
+## Migrations
+
+Alembic owns the schema; the app never creates tables. Every schema change needs a migration
+in `migrations/versions/` and a test. With the test database from Checks:
+
+```sh
+export DATABASE_URL=postgresql+psycopg://irishrail:irishrail@localhost:55432/irishrail_test
+alembic upgrade head
+alembic revision --autogenerate -m "add poll outcomes"
+```
+
+- Review the generated file; `test_models_match_the_migrations` fails if models and migrations differ.
+- Deploy migrates before the new release starts and rollback never downgrades, so each migration
+  must work with the previous release (expand first, remove in a later release).
+- Never edit a merged migration or the baseline, and never downgrade production.
+- Stamping production is manual and documented in [docs/operations.md](docs/operations.md#database-migrations).
+
 ## Boundaries
 
 - Use conventional commits (`feat:`, `fix:`, `test:`, `ci:`, `docs:`, `chore:`).
 - Never run `terraform apply`, `aws`, or `ssh` commands. Server instructions: [docs/operations.md](docs/operations.md).
 - Never commit `.env`, `backend.hcl`, or `terraform.tfvars`.
-- Keep work within the requested PR; migrations and dashboard polish are later work.
+- Keep work within the requested PR; dashboard polish is later work.
 
 ## Irish Rail XML quirks
 

@@ -4,9 +4,22 @@ import gzip
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from alembic import command as alembic_command
+from migration_helpers import (
+    BASELINE,
+    INSERT,
+    alembic_config,
+    create_all,
+    head,
+    revision,
+    schema,
+    sql,
+    tables,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -371,3 +384,127 @@ def test_prune_images_continues_after_a_failed_removal(deployment):
     assert result.returncode == 0  # Retention never fails a running deploy.
     assert removed(deployment) == {"latest", "a" * 40}
     assert "could not be removed" in result.stderr
+
+
+# Migration scripts run the real Alembic and SQL against scratch PostgreSQL databases. The fake
+# docker runs `compose run ... web alembic <args>` with this checkout's Alembic, and pipes
+# `compose exec ... db psql` input to the database, as the containers would.
+FAKE_DATABASE_DOCKER = f'''
+printf '%s %s\\n' "${{IMAGE_TAG:-}}" "$*" >> "$CHECK_DIR/docker.log"
+if [[ $1 == image ]]; then exit $((CACHED == 1 ? 0 : 1)); fi
+if [[ " $* " == *" run "* ]]; then
+  while [[ $1 != alembic ]]; do shift; done
+  shift
+  cd "{ROOT}"
+  DATABASE_URL=$SCRATCH_DATABASE_URL exec "{sys.executable}" -m alembic "$@"
+fi
+if [[ " $* " == *" exec "* ]]; then
+  exec "{sys.executable}" -c '
+import os, sys, psycopg
+try:
+    with psycopg.connect(os.environ["SCRATCH_DATABASE_URL"].replace("+psycopg", "")) as conn:
+        conn.execute(sys.stdin.read())
+except psycopg.Error as error:
+    sys.exit(f"ERROR:  {{error}}")
+'
+fi
+'''
+
+
+@pytest.fixture
+def database_server(server, monkeypatch, scratch_database):
+    """A server whose database is an empty scratch database; the new release is being deployed."""
+    url = scratch_database("deploy")
+    monkeypatch.setenv("SCRATCH_DATABASE_URL", url)
+    monkeypatch.setenv("APP_DIR", str(server))
+    command(server, "docker", FAKE_DATABASE_DOCKER)
+    return server, url
+
+
+def docker_calls(server):
+    return (server / "docker.log").read_text().splitlines()
+
+
+def test_migrate_upgrades_a_new_database_and_logs_both_revisions(database_server, monkeypatch):
+    server, url = database_server
+    monkeypatch.setenv("CACHED", "0")
+    result = run(server, f"releases/{NEW}/scripts/migrate.sh", NEW)
+    assert result.returncode == 0, result.stderr
+    assert "[migrate] Revision before: none" in result.stdout
+    assert f"[migrate] Revision after: {BASELINE} (head)" in result.stdout
+    assert revision(url) == head()
+    compose = f"{NEW} compose --env-file .env -f releases/{NEW}/docker-compose.prod.yml"
+    assert docker_calls(server) == [
+        f"{NEW} image inspect ghcr.io/dansom0/irish-rail-tracker:{NEW}",
+        f"{compose} pull web worker",
+        f"{compose} up -d --wait db",
+        f"{compose} run --rm --no-deps -T web alembic current",
+        f"{compose} run --rm --no-deps -T web alembic upgrade head",
+        f"{compose} run --rm --no-deps -T web alembic current",
+    ]
+
+
+def test_migrate_refuses_an_unstamped_database_and_starts_nothing(database_server):
+    server, url = database_server
+    create_all(url)
+    result = run(server, f"releases/{NEW}/scripts/migrate.sh", NEW)
+    assert result.returncode != 0
+    assert "no Alembic revision" in result.stderr
+    assert "stamp-baseline.sh" in result.stderr
+    assert result.stderr.count("[migrate] Failed; the running release was not changed") == 1
+    assert tables(url) == {"observations"}
+    assert not any("up -d --remove-orphans" in call for call in docker_calls(server))
+    assert_current(server, NEW, NEW_COMPOSE)
+
+
+def test_deploy_migrates_before_activating_the_release():
+    deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+    migrate = deploy.index('"releases/$sha/scripts/migrate.sh" "$sha"')
+    assert migrate < deploy.index('"releases/$sha/scripts/activate-release.sh" --pull "$sha"')
+    assert "set -euo pipefail" in deploy[:migrate]
+
+
+def test_stamp_then_migrate_keeps_the_existing_schema_and_data(database_server, scratch_database):
+    server, url = database_server
+    create_all(url)  # Production, as the app's create_all built it.
+    sql(url, INSERT)
+    stamped = run(server, "scripts/stamp-baseline.sh")
+    assert stamped.returncode == 0, stamped.stderr
+    assert revision(url) == BASELINE
+    result = run(server, f"releases/{NEW}/scripts/migrate.sh", NEW)
+    assert result.returncode == 0, result.stderr
+    assert f"[migrate] Revision before: {BASELINE} (head)" in result.stdout
+    assert not any(" pull " in call for call in docker_calls(server))  # The image was cached.
+    assert sql(url, "SELECT train_code FROM observations") == [("E101",)]
+    fresh = scratch_database("fresh_deploy")
+    alembic_command.upgrade(alembic_config(fresh), "head")
+    assert schema(url, exclude=()) == schema(fresh, exclude=())  # alembic_version included.
+
+
+def test_stamp_refuses_an_already_stamped_database(database_server):
+    server, url = database_server
+    create_all(url)
+    assert run(server, "scripts/stamp-baseline.sh").returncode == 0
+    result = run(server, "scripts/stamp-baseline.sh")
+    assert result.returncode != 0
+    assert "alembic_version already exists" in result.stderr
+    assert "[stamp] Failed; nothing was changed" in result.stderr
+    assert sql(url, "SELECT version_num FROM alembic_version") == [(BASELINE,)]
+
+
+def test_stamp_refuses_a_database_without_the_tables(database_server):
+    server, url = database_server
+    result = run(server, "scripts/stamp-baseline.sh")
+    assert result.returncode != 0
+    assert "the observations table does not exist" in result.stderr
+    assert tables(url) == set()
+
+
+def test_stamp_refuses_a_schema_missing_the_upsert_constraint(database_server):
+    server, url = database_server
+    create_all(url)
+    sql(url, "ALTER TABLE observations DROP CONSTRAINT uq_observation_train")
+    result = run(server, "scripts/stamp-baseline.sh")
+    assert result.returncode != 0
+    assert "uq_observation_train is missing" in result.stderr
+    assert tables(url) == {"observations"}

@@ -79,3 +79,5 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: docker build --tag irish-rail-tracker:ci .
+      - name: Check the image ships its migrations
+        run: docker run --rm irish-rail-tracker:ci alembic heads

@@ -36,7 +36,7 @@ CI runs on pull requests and pushes to `main`. It checks Python with Ruff, runs 
 
 After CI passes for a push to this repository's `main`, Deploy builds the tested commit. It publishes the image to GHCR with both its full commit SHA and `latest` as tags. Deploys run one at a time. You can also start Deploy manually on `main`.
 
-Deploy copies the commit's production Compose file and scripts to the server as a release bundle (see [Server layout](#server-layout)). It runs [`scripts/activate-release.sh`](../scripts/activate-release.sh) from that bundle, which downloads the SHA-tagged image and starts the services with the bundle's Compose file. It then checks `http://localhost/health` on the server for up to 60 seconds:
+Deploy copies the commit's production Compose file and scripts to the server as a release bundle (see [Server layout](#server-layout)). It first migrates the database with the new image (see [Database migrations](#database-migrations)); if that fails, the deploy stops and the running release is not touched. It then runs [`scripts/activate-release.sh`](../scripts/activate-release.sh) from that bundle, which downloads the SHA-tagged image and starts the services with the bundle's Compose file. It then checks `http://localhost/health` on the server for up to 60 seconds:
 
 - **Healthy:** it records the full SHA as `IMAGE_TAG` in the server's `.env` and points `current` at the new bundle. Deploy then schedules backups.
 - **Unhealthy:** it starts the previous release again from its own bundle and image and leaves `.env` and `current` unchanged. The deploy job fails. The new bundle and image stay on the server for investigation.
@@ -49,7 +49,62 @@ After the switch, the workflow checks the public `/health` page for up to 60 sec
 
 To restart services or apply configuration changes, re-run the **Deploy** workflow on `main`. Never use a bare `docker compose up -d` on the server; the workflow selects and records the deployed image.
 
-Web and worker share one Python 3.12 image. The worker checks stations every five minutes by default. PostgreSQL keeps one row per station, train code, and train date, updating it on each reading.
+Web and worker share one Python 3.12 image. Neither creates tables: the schema is owned by the migrations. The worker checks stations every five minutes by default. PostgreSQL keeps one row per station, train code, and train date, updating it on each reading.
+
+## Database migrations
+
+The schema is managed by [Alembic](https://alembic.sqlalchemy.org/) migrations in [`migrations/versions/`](../migrations/versions/). The database records the revision it is at in the `alembic_version` table.
+
+Deploy runs [`scripts/migrate.sh`](../scripts/migrate.sh) from the new release's bundle, before `activate-release.sh`. It downloads the release image if it is not on the server, starts the database if it is not running, and runs `alembic upgrade head` in a one-off container from that image. The deploy log shows the revision before and after (`[migrate] Revision before: ...`). If the migration fails, its transaction is rolled back, the deploy stops, and the running web and worker are not changed.
+
+The migration is applied before the new release's health check, and rollback never downgrades the schema. Every migration must therefore keep working with the release before it: add columns as nullable or with a default, and remove anything the previous release uses only in a later release. Downgrading the baseline is not supported; it refuses because it would drop all observations. To undo a schema change, restore a backup.
+
+The baseline revision (`0001_baseline`) creates the schema the app used to build with `create_all`. It only runs on an empty database. On a database that has tables but no `alembic_version`, it stops with `Database has tables (...) but no Alembic revision`, so it can never be applied over existing data. Such a database must be stamped once instead.
+
+### Stamping the existing production database (one time)
+
+Production was created by `create_all` before migrations existed, so it has the tables but no `alembic_version`. [`scripts/stamp-baseline.sh`](../scripts/stamp-baseline.sh) records the baseline without running it. It refuses to run if `alembic_version` already exists or if the `observations` table, its `uq_observation_train` unique constraint or its indexes are missing. It makes all its checks and changes in one transaction, so a refusal changes nothing.
+
+Do this **before merging the pull request that adds migrations**, in this order. Until the stamp is done, that release's deploy stops at the migration and the running release stays up.
+
+1. **Verify that a backup restores.** On the server, run `./scripts/backup.sh`. Download that backup with your own AWS identity and copy it to the server as `/tmp/restore.sql.gz` (see [Restore a backup](#restore-a-backup)). Restore it into a scratch database, compare it with production, and remove it:
+
+   ```bash
+   set -euo pipefail
+   cd /opt/irish-rail-tracker
+   gzip -t /tmp/restore.sql.gz
+   db() { docker compose --env-file .env -f docker-compose.prod.yml exec -T db "$@"; }
+   db sh -c 'createdb -U "$POSTGRES_USER" -O "$POSTGRES_USER" restore_check'
+   gzip -dc /tmp/restore.sql.gz \
+     | db sh -c 'psql -X -q -v ON_ERROR_STOP=1 --single-transaction -U "$POSTGRES_USER" -d restore_check'
+   db sh -c 'psql -X -U "$POSTGRES_USER" -d restore_check -c "SELECT count(*), max(fetched_at) FROM observations;"'
+   db sh -c 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*), max(fetched_at) FROM observations;"'
+   db sh -c 'dropdb -U "$POSTGRES_USER" restore_check'
+   ```
+
+   The restored count and latest time should match production, or be slightly behind it: the worker keeps adding rows. Do not continue until a restore has worked. The scratch copy needs about as much free disk as the database: check `df -h /` first. If a step fails, remove the copy with the last command.
+
+2. **Stamp the baseline.** From your computer, copy the script from the pull request's branch to the server. It is not in a release bundle yet. Then run it on the server:
+
+   ```sh
+   scp scripts/stamp-baseline.sh "$EC2_USER@$EC2_HOST:/tmp/stamp-baseline.sh"
+   ```
+
+   ```sh
+   bash /tmp/stamp-baseline.sh
+   cd /opt/irish-rail-tracker
+   docker compose --env-file .env -f docker-compose.prod.yml exec -T db \
+     sh -c 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT version_num FROM alembic_version;"'
+   rm /tmp/stamp-baseline.sh
+   ```
+
+   It prints `[stamp] Stamped 0001_baseline`, and the query shows `0001_baseline`. The running release keeps working: its `create_all` only creates missing tables and ignores `alembic_version`.
+
+3. **Merge the pull request.** Deploy runs after CI. In the deploy log, check `[migrate] Revision before: 0001_baseline (head)` and the same revision after it: no migration ran. Then check `/health` and the worker logs.
+
+If the deploy stops with `no Alembic revision`, the stamp was not done. Nothing was changed: do step 2, then re-run the **Deploy** workflow on `main`.
+
+A new, empty database (for example, on a replacement server) needs no stamp: the first deploy runs the baseline and creates the schema.
 
 ## Server layout
 
@@ -95,7 +150,7 @@ The script switches the image and the release bundle together. It uses the saved
 - **Healthy:** it records the SHA in `.env` and points `current` at the bundle. Check the dashboard and the worker logs.
 - **Unhealthy:** it restarts the release that was current and exits with an error. Nothing is switched.
 
-A release without a bundle in `releases/` cannot be rolled back to; the script stops before changing anything. If its image is missing and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents and `.env` settings in place. The next successful deploy replaces that version.
+A release without a bundle in `releases/` cannot be rolled back to; the script stops before changing anything. If its image is missing and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents, its schema and `.env` settings in place; it never runs migrations (see [Database migrations](#database-migrations)). The next successful deploy replaces that version.
 
 If a deploy or rollback is interrupted (for example, the SSH connection drops), `current` and `.env` still name the last healthy release, but other containers may be running. Run `./scripts/rollback.sh "$(basename "$(readlink current)")"` to start that release again.
 
@@ -137,7 +192,9 @@ docker compose --env-file .env -f docker-compose.prod.yml exec -T db \
   sh -c 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*), max(fetched_at) FROM observations;"'
 ```
 
-If a step fails, leave web and worker stopped and check the error. If the current database was saved successfully, that file holds the previous data. Check the restored row count and last observation time. Then restart the existing containers to keep the same app version:
+If a step fails, leave web and worker stopped and check the error.
+
+The backup includes the schema and its `alembic_version`. If it was taken before the running release's newest migration, bring the schema up to date before starting the app: `./scripts/migrate.sh "$(basename "$(readlink current)")"`. A backup taken before the baseline was stamped has no `alembic_version`; stamp it first with `./scripts/stamp-baseline.sh`. If the current database was saved successfully, that file holds the previous data. Check the restored row count and last observation time. Then restart the existing containers to keep the same app version:
 
 ```sh
 docker compose --env-file .env -f docker-compose.prod.yml start web worker
