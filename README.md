@@ -66,7 +66,7 @@ flowchart LR
 - **Backups:** a nightly `pg_dump` goes to a private, encrypted S3 bucket.
   - **Restore check:** on 28 Sep 2026 a backup was restored into a scratch database, and its row counts matched production. This was a manual check; automated restore checks are [#45](https://github.com/DanSom0/irish-rail-tracker/issues/45).
 - **Disk:** container logs are capped, only the current and two previous release images are kept, and `/status` shows disk use.
-- **HTTPS:** Caddy terminates TLS with an automatic Let's Encrypt certificate and redirects all plain HTTP, including requests to the bare IP, to the site. The worker fetches the station feed over HTTPS.
+- **HTTPS:** Caddy terminates TLS with an automatic Let's Encrypt certificate and redirects all plain HTTP, including requests to the bare IP, to the site. It sends HSTS with a short `max-age`. The worker fetches the station feed over HTTPS.
 - **Health:** `/health` is liveness (web and database, plus the running release). `/health/ingestion` is readiness: it returns HTTP 503 if the worker has not finished a fetch cycle recently, and counts stations by poll outcome.
 
 ## Design decisions
@@ -94,6 +94,7 @@ Blameless postmortems, based on the git history and pull requests:
 - [A manual restart with "latest" reverted production](docs/postmortems/2026-09-stale-latest-image.md): the server's `latest` tag pointed at an older image.
 - [Departed trains shown as current delays](docs/postmortems/2026-09-stale-current-delays.md): empty and failed polls were not stored, so old trains stayed on the boards.
 - [Deploys reported success without activating](docs/postmortems/2026-09-deploys-without-activation.md): Compose read the rest of the deploy script, which then ended early with success.
+- [HTTPS release deployed before port 443 was open](docs/postmortems/2026-09-https-port-closed.md): the deploy switched production to HTTPS before the security group allowed it, so HTTP redirected visitors to a closed port.
 
 ## Roadmap
 

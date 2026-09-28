@@ -753,5 +753,38 @@ def test_only_caddy_publishes_ports_and_its_certificates_persist():
     assert "- caddy_data:/data" in caddy
     assert "\n  caddy_data:\n" in compose[compose.index("\nvolumes:"):]
     caddyfile = (ROOT / "Caddyfile").read_text()
-    assert f"\n{SITE} {{\n\treverse_proxy web:8000\n}}" in caddyfile
+    assert "\treverse_proxy web:8000\n}" in caddyfile[caddyfile.index(f"\n{SITE} {{"):]
     assert f"http:// {{\n\tredir https://{SITE}{{uri}} 308\n}}" in caddyfile
+
+
+@pytest.mark.parametrize("connect_status,passes", [
+    (0, True),     # Connected.
+    (1, True),     # Refused: open, but nothing listens before a release with Caddy.
+    (124, False),  # Timed out: the security group drops the connection attempt.
+])
+def test_deploy_checks_the_https_port_before_building(deployment, monkeypatch, connect_status,
+                                                      passes):
+    command(deployment, "timeout", f'echo "$*" > "$CHECK_DIR/timeout.args"; exit {connect_status}')
+    monkeypatch.setenv("SITE_URL", f"https://{SITE}")
+    result = subprocess.run(["bash", "-c", workflow_step("Check public HTTPS port")], cwd="/",
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+    assert f"/dev/tcp/{SITE}/443" in (deployment / "timeout.args").read_text()
+    if not passes:
+        assert f"::error::Port 443 on {SITE} did not answer" in result.stdout
+    steps = [line.strip() for line in (ROOT / ".github" / "workflows" / "deploy.yml")
+             .read_text().splitlines() if line.startswith("      - ")]
+    assert steps[0] == "- name: Check public HTTPS port"
+
+
+def test_https_site_sends_a_short_hsts_header():
+    caddyfile = (ROOT / "Caddyfile").read_text()
+    site = caddyfile[caddyfile.index(f"\n{SITE} {{"):caddyfile.index("\n}", caddyfile.index(f"\n{SITE} {{"))]
+    assert '\theader Strict-Transport-Security "max-age=300"\n' in site
+    assert "includeSubDomains" not in caddyfile and "preload" not in caddyfile
+
+
+def test_workflows_pin_the_runner_image():
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        runners = [line.strip() for line in workflow.read_text().splitlines() if "runs-on:" in line]
+        assert runners and all(line == "runs-on: ubuntu-24.04" for line in runners), workflow.name

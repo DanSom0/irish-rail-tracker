@@ -9,6 +9,8 @@
 }
 
 dublinrailtracker.duckdns.org {
+	# Short max-age while HSTS is new; see docs/operations.md#https.
+	header Strict-Transport-Security "max-age=300"
 	reverse_proxy web:8000
 }
 
