@@ -4,11 +4,17 @@ Portfolio project for SRE/DevOps internships. The repo itself (structure,
 commits, PRs, Actions, README) should look like a professional engineer's.
 
 ## Status
-- PR 1 (core app): merged
-- PR 2 (tests + CI): merged
-- PR 3 (Terraform infrastructure): merged
-- PR 4 (production deployment + backups): merged
-- Next: PR 5 (README, AGENTS.md, postmortems)
+The planned PRs 1 to 7 below are merged, and the service runs in
+production at http://54.228.205.197. Later work came from a read-only
+audit (26 Sep 2026) and from incidents; since then:
+- Alembic migrations own the schema (baseline `0001_baseline`, then
+  `0002_station_polls`).
+- Every station poll is recorded (ok, empty or error), with a worker
+  heartbeat and /health/ingestion.
+- Deploys use versioned release bundles, migrate before activation, and
+  must confirm the new release on /health.
+- The live map shows station delays and last-reported train positions.
+Remaining work is tracked in GitHub issues, not in this file.
 
 ## Stack
 Python 3.12, Flask, PostgreSQL 16, SQLAlchemy, Alembic, Docker +
@@ -18,8 +24,14 @@ Terraform, single AWS EC2 instance (Ubuntu).
 ## Data source
 Irish Rail realtime API (XML, no key needed):
 http://api.irishrail.ie/realtime/realtime.asmx
-- getStationDataByCodeXML for a configurable list of stations.
-  Defaults: CNLLY, PERSE, HSTON, TARA, MHIDE.
+- getStationDataByCodeXML for a configurable list of stations. The
+  default list of 20 Dublin-area stations lives in app/config.py
+  (`DEFAULT_STATION_CODES`); STATION_CODES overrides it, and production
+  sets no override.
+- getCurrentTrainsXML for train positions: fetched by the web app for
+  the live map, with a short timeout (3 s by default) and a 60-second
+  per-process cache that also caches failures. Positions are the last
+  station a train passed, not GPS.
 - The "Late" field is delay in minutes.
 - Response has a default XML namespace; Traincode has trailing
   whitespace; Traindate format is "16 Sep 2026"; terminating trains
@@ -31,13 +43,24 @@ http://api.irishrail.ie/realtime/realtime.asmx
 ## Application
 - Two services from one image: `web` (Flask + Gunicorn) and `worker`
   (APScheduler fetcher). Plus `db` (Postgres).
+- Alembic migrations (migrations/) own the schema; the app never creates
+  tables. Each migration must keep working with the previous release.
 - Store each observation: station, train code, train date, origin,
   destination, scheduled time, delay minutes, fetched_at.
+- Record each station's latest poll (station_polls: ok, empty or error,
+  with train count and a short error reason) and the worker's last
+  completed cycle (worker_heartbeat). A successful poll saves its
+  observations and its record in one transaction with one shared
+  timestamp; a station's current trains are exactly that poll's trains.
 - Dedup: unique on (station, train code, train date); upsert the latest
   delay so each train is counted once in averages.
 - Dashboard (server-rendered, minimal CSS): current delays table, average
   delay by station, average delay by route, last updated time.
-- /health returns 200 with DB connectivity status as JSON.
+- /health returns 200 with DB connectivity status and the running
+  release SHA as JSON (liveness).
+- /health/ingestion returns 200 while the worker's heartbeat is younger
+  than max(15 minutes, 3 x FETCH_INTERVAL_MINUTES), else 503, with
+  station counts by poll outcome (readiness).
 - Structured JSON logging to stdout.
 - All config via environment variables; include .env.example.
   No secrets committed anywhere.
@@ -70,10 +93,17 @@ http://api.irishrail.ie/realtime/realtime.asmx
 - docker-compose.prod.yml: uses the GHCR image (no build), restart
   policies, web on port 80, persistent Postgres volume.
 - deploy.yml: on push to main, after CI passes. Build image, push to
-  ghcr.io tagged with commit SHA and latest, SSH into EC2, log the host
-  into GHCR, pull the new image, `docker compose up -d`, then curl
-  /health and fail the job if it doesn't return 200.
-- Rollback: scripts/rollback.sh redeploys a given previous image SHA.
+  ghcr.io tagged with the commit SHA (and `latest`, which the server
+  does not use), copy that commit's Compose file and
+  scripts to the server as a release bundle, run `alembic upgrade head`
+  with the new image, then start the release. It becomes current only
+  after the server-side /health check passes; otherwise the previous
+  release is restarted. The job fails unless the server reports the new
+  release as current and the public /health reports its SHA.
+- The server's .env records the running SHA as IMAGE_TAG; restarts go
+  through the Deploy workflow, never a bare `docker compose up -d`.
+- Rollback: scripts/rollback.sh starts a previous release's bundle with
+  its image. It never runs or reverses migrations.
 - Backups: nightly pg_dump on the instance (cron), uploaded to the
   backup bucket via the instance role. No AWS keys on the instance.
 - Use a GitHub Environment called "production" for deploy secrets.
@@ -82,8 +112,9 @@ http://api.irishrail.ie/realtime/realtime.asmx
 - Repo layout: app/, tests/, infra/, scripts/, docs/, .github/workflows/,
   docker-compose.yml, docker-compose.prod.yml, Dockerfile, .env.example,
   README.md, AGENTS.md.
-- ci.yml: on PRs and pushes to main. Ruff, pytest, and a Docker image
-  build (no push) so base-image and server changes are tested.
+- ci.yml: on PRs and pushes to main. Ruff, pytest against PostgreSQL,
+  Terraform fmt and validate, ShellCheck, a production Compose config
+  check, and a Docker image build (no push).
 - Dependabot for pip, Docker, GitHub Actions and Terraform. Ignore minor
   and major updates to the python Docker base image. Group GitHub
   Actions updates into one weekly PR.
@@ -93,13 +124,12 @@ http://api.irishrail.ie/realtime/realtime.asmx
 - One PR at a time, in this order:
   1. Core app (done)
   2. Tests + CI + Dependabot + PR template (done)
-  3. Terraform infrastructure; Docker build in CI; Dependabot config changes
-  4. Production compose, deploy.yml, rollback script, backups
-  5. README, AGENTS.md, postmortem
+  3. Terraform infrastructure; Docker build in CI; Dependabot config changes (done)
+  4. Production compose, deploy.yml, rollback script, backups (done)
+  5. README, AGENTS.md, postmortem (done)
   6. Alembic migrations (baseline matching the existing schema, safe
-     to run against the production database)
-  7. Dashboard polish and delay patterns (only after a few weeks of
-     production data)
+     to run against the production database) (done)
+  7. Dashboard polish and delay patterns (done)
 
 ## README
 Project summary, live link, Mermaid architecture diagram (Terraform ->
@@ -110,11 +140,12 @@ infra, how to roll back, backups, uptime monitoring (external monitor on
 (including why terraform apply is manual and what the delay figure
 actually measures: the last reading before a train leaves the board).
 
-## Postmortem
-docs/postmortems/2026-09-zero-observations.md: the XML namespace bug
-where the worker reported successful fetches but stored zero rows.
-Cover impact, why it went undetected, detection, fix, and the
-per-station parse count added to prevent recurrence. Blameless format.
+## Postmortems
+docs/postmortems/: one blameless postmortem per incident (summary,
+impact, timeline, root cause, detection, fix, lessons, follow-ups),
+using facts from git history and PRs. The first covered the XML
+namespace bug where the worker reported successful fetches but stored
+zero rows; the README links them all.
 
 ## PR 7: Dashboard polish and delay patterns
 Server-rendered, no JS frameworks.
