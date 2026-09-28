@@ -339,7 +339,7 @@ def test_live_map_renders_complete_list_without_javascript(client, dashboard_dat
     page = client.get("/map").get_data(as_text=True)
     assert "Live station delays" in page
     assert "Tracking 2 Dublin-area stations." in page
-    assert "Showing each station's latest successful update" in page
+    assert "Showing each station’s latest successful update" in page
     assert 'id="map-station-list"' in page and "ARRIVE" in page and "DEPART" in page
     assert "Average delay: 4.5 min" in page and "No recent data" in page
     assert "Arrivals" in page and "Arriving from Portlaoise" in page
