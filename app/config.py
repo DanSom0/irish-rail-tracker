@@ -26,7 +26,7 @@ class Config:
     )
     IRISH_RAIL_API_URL = os.getenv(
         "IRISH_RAIL_API_URL",
-        "http://api.irishrail.ie/realtime/realtime.asmx/getStationDataByCodeXML",
+        "https://api.irishrail.ie/realtime/realtime.asmx/getStationDataByCodeXML",
     )
     IRISH_RAIL_TRAINS_API_URL = os.getenv(
         "IRISH_RAIL_TRAINS_API_URL",

@@ -123,10 +123,17 @@ NEW_COMPOSE = OLD_COMPOSE.replace(
 assert NEW_COMPOSE != OLD_COMPOSE
 
 
-def add_release(deployment, sha, compose):
+SITE = "dublinrailtracker.duckdns.org"
+HTTPS_CHECK = f"--resolve {SITE}:443:127.0.0.1 https://{SITE}/health"
+
+
+def add_release(deployment, sha, compose, caddy=True):
+    """A release bundle; caddy=False is a release from before Caddy served HTTPS."""
     bundle = deployment / "releases" / sha
     shutil.copytree(ROOT / "scripts", bundle / "scripts")
     (bundle / "docker-compose.prod.yml").write_text(compose)
+    if caddy:
+        shutil.copy(ROOT / "Caddyfile", bundle)
 
 
 def activate(deployment, sha):
@@ -165,9 +172,15 @@ if [[ " $* " == *" up -d "* ]]; then
 fi
 ''')
     command(deployment, "curl", '''
+printf '%s %s\\n' "$(cat "$CHECK_DIR/running.tag")" "${*: -3}" >> "$CHECK_DIR/curl.log"
 if [[ " $HEALTHY " == *" $(cat "$CHECK_DIR/running.tag") "* ]]; then printf 200; else printf 503; fi
 ''')
     return deployment
+
+
+def health_checks(server):
+    """Each health check request as '<running tag> <last three curl arguments>'."""
+    return set((server / "curl.log").read_text().splitlines())
 
 
 def running(server):
@@ -206,6 +219,37 @@ def test_failed_health_check_leaves_the_previous_release_active(server, monkeypa
     log = (server / "docker.log").read_text()
     assert f"{NEW} compose --env-file .env -f releases/{NEW}/docker-compose.prod.yml pull\n" in log
     assert running(server) == (OLD, OLD_COMPOSE)
+    assert_current(server, OLD, OLD_COMPOSE)
+
+
+def test_releases_with_caddy_are_checked_over_https_through_caddy(server):
+    activate(server, OLD)
+    result = run(server, f"releases/{NEW}/scripts/activate-release.sh", NEW)
+    assert result.returncode == 0, result.stderr
+    assert health_checks(server) == {f"{NEW} {HTTPS_CHECK}"}
+    assert os.readlink(server / "Caddyfile") == "current/Caddyfile"
+    assert (server / "Caddyfile").read_text() == (ROOT / "Caddyfile").read_text()
+
+
+def test_rollback_to_a_release_before_caddy_checks_plain_http(server):
+    (server / "releases" / OLD / "Caddyfile").unlink()
+    (server / "Caddyfile").symlink_to("current/Caddyfile")
+    result = run(server, "rollback.sh", OLD)
+    assert result.returncode == 0, result.stderr
+    assert health_checks(server) == {f"{OLD} --max-time 3 http://localhost/health"}
+    assert not (server / "Caddyfile").is_symlink()
+    assert_current(server, OLD, OLD_COMPOSE)
+
+
+def test_failed_https_release_restarts_the_previous_one_with_its_own_check(server, monkeypatch):
+    (server / "releases" / OLD / "Caddyfile").unlink()
+    activate(server, OLD)
+    monkeypatch.setenv("HEALTHY", OLD)
+    result = run(server, f"releases/{NEW}/scripts/activate-release.sh", NEW)
+    assert result.returncode != 0
+    assert health_checks(server) == {f"{NEW} {HTTPS_CHECK}",
+                                     f"{OLD} --max-time 3 http://localhost/health"}
+    assert not (server / "Caddyfile").exists()
     assert_current(server, OLD, OLD_COMPOSE)
 
 
@@ -283,6 +327,22 @@ esac
 ''')
     assert run(deployment, "healthcheck.sh", "http://localhost/health").returncode == 0
     assert (deployment / "attempts").read_text().strip() == "5"
+
+
+def test_healthcheck_passes_resolve_to_curl(deployment):
+    command(deployment, "curl", 'printf "%s\\n" "$*" > "$CHECK_DIR/args"; printf 200')
+    result = run(deployment, "healthcheck.sh", "--resolve", f"{SITE}:443:127.0.0.1",
+                 f"https://{SITE}/health")
+    assert result.returncode == 0, result.stderr
+    assert (deployment / "args").read_text().endswith(f" {HTTPS_CHECK}\n")
+
+
+def test_healthcheck_rejects_unknown_options(deployment):
+    command(deployment, "curl", 'touch "$CHECK_DIR/called"; printf 200')
+    result = run(deployment, "healthcheck.sh", "--insecure", "x", f"https://{SITE}/health")
+    assert result.returncode != 0
+    assert "Usage:" in result.stderr
+    assert not (deployment / "called").exists()
 
 
 def test_healthcheck_fails_when_never_healthy(deployment):
@@ -546,7 +606,8 @@ def deploy_step(server, monkeypatch, tmp_path):
     """Run the step against the fixture server, deploying DEPLOY; return the result."""
     incoming = server / "releases" / f".incoming-{DEPLOY}"
     shutil.copytree(ROOT / "scripts", incoming / "scripts")
-    shutil.copy(ROOT / "docker-compose.prod.yml", incoming)
+    for name in ["docker-compose.prod.yml", "Caddyfile"]:
+        shutil.copy(ROOT / name, incoming)
     monkeypatch.setenv("HEALTHY", f"{OLD} {NEW} {DEPLOY}")
     command(server, "docker", STDIN_DOCKER)
     command(server, "ssh", 'exec bash -c "${@: -1}"')  # The remote command, run locally.
@@ -673,3 +734,24 @@ def test_production_compose_reports_the_image_tag_as_the_release():
     web = compose[compose.index("  web:"):compose.index("  worker:")]
     assert "RELEASE_SHA: ${IMAGE_TAG:-}" in web
     assert '--release "$DEPLOY_SHA"' in (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+
+
+def test_deploy_copies_the_caddyfile_and_checks_the_public_https_site():
+    assert " Caddyfile " in workflow_step("Copy release bundle")
+    workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+    assert f"SITE_URL: https://{SITE}\n" in workflow
+    assert './scripts/healthcheck.sh --release "$DEPLOY_SHA" "$SITE_URL/health"' in workflow
+
+
+def test_only_caddy_publishes_ports_and_its_certificates_persist():
+    compose = (ROOT / "docker-compose.prod.yml").read_text()
+    services = compose[compose.index("services:"):compose.index("\nvolumes:")]
+    caddy = services[services.index("  caddy:"):]
+    assert services.count("ports:") == caddy.count("ports:") == 1
+    assert '- "80:80"' in caddy and '- "443:443"' in caddy
+    assert "- ./Caddyfile:/etc/caddy/Caddyfile:ro" in caddy
+    assert "- caddy_data:/data" in caddy
+    assert "\n  caddy_data:\n" in compose[compose.index("\nvolumes:"):]
+    caddyfile = (ROOT / "Caddyfile").read_text()
+    assert f"\n{SITE} {{\n\treverse_proxy web:8000\n}}" in caddyfile
+    assert f"http:// {{\n\tredir https://{SITE}{{uri}} 308\n}}" in caddyfile

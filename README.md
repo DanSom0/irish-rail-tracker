@@ -4,7 +4,7 @@
 
 A live dashboard of train delays at 20 Dublin-area stations, built from Irish Rail's public realtime feed. It is a small service run like a production one. Terraform builds the infrastructure, CI tests every change, and deploys are SHA-pinned, migrated and health-gated. It has nightly backups, health and ingestion checks, and written postmortems for real incidents.
 
-**[Live app: http://54.228.205.197](http://54.228.205.197)** · [Operations runbook](docs/operations.md)
+**[Live app: https://dublinrailtracker.duckdns.org](https://dublinrailtracker.duckdns.org)** · [Operations runbook](docs/operations.md)
 
 <p>
   <img src="docs/images/overview-desktop.png" alt="Overview page: network on-time share, average delay and the largest current delays" width="66%">
@@ -34,6 +34,7 @@ flowchart LR
   subgraph AWS[AWS, managed by Terraform]
     EIP[Elastic IP] --> EC2
     subgraph EC2[EC2 host]
+      CADDY[caddy: HTTPS, Let's Encrypt] --> WEB
       REL[Release bundles] --> MIG[Migrate: alembic upgrade head]
       MIG --> WEB[web: Flask + Gunicorn]
       MIG --> WRK[worker: APScheduler]
@@ -49,13 +50,14 @@ flowchart LR
   WRK -->|every 5 min| STN[Irish Rail station feed]
   WEB -->|60 s cache| TRN[Irish Rail train feed]
   DB -->|nightly pg_dump| S3
-  MON[External uptime monitor] -->|/health| WEB
+  USER[Browser] -->|HTTPS| EIP
+  MON[External uptime monitor] -->|HTTPS /health| EIP
 ```
 
 ## How it's built and operated
 
-- **CI:** every pull request and push runs Ruff, pytest against PostgreSQL 16, Terraform format and validate, ShellCheck, a production Compose config check and a Docker build.
-- **Deploy:** after CI passes on `main`, Deploy builds an image tagged with the commit SHA. It copies that commit's Compose file and scripts to the server as a release bundle.
+- **CI:** every pull request and push runs Ruff, pytest against PostgreSQL 16, Terraform format and validate, ShellCheck, a production Compose config check, Caddy config validation and a Docker build.
+- **Deploy:** after CI passes on `main`, Deploy builds an image tagged with the commit SHA. It copies that commit's Compose file, Caddyfile and scripts to the server as a release bundle.
   - **Migrations first:** it migrates the database before starting anything new.
   - **Health-gated activation:** the new release only becomes current after `/health` passes on the server.
   - **Release check:** the job then checks that the public `/health` reports the deployed SHA.
@@ -64,6 +66,7 @@ flowchart LR
 - **Backups:** a nightly `pg_dump` goes to a private, encrypted S3 bucket.
   - **Restore check:** on 28 Sep 2026 a backup was restored into a scratch database, and its row counts matched production. This was a manual check; automated restore checks are [#45](https://github.com/DanSom0/irish-rail-tracker/issues/45).
 - **Disk:** container logs are capped, only the current and two previous release images are kept, and `/status` shows disk use.
+- **HTTPS:** Caddy terminates TLS with an automatic Let's Encrypt certificate and redirects all plain HTTP, including requests to the bare IP, to the site. The worker fetches the station feed over HTTPS.
 - **Health:** `/health` is liveness (web and database, plus the running release). `/health/ingestion` is readiness: it returns HTTP 503 if the worker has not finished a fetch cycle recently, and counts stations by poll outcome.
 
 ## Design decisions

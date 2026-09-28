@@ -11,7 +11,7 @@ worker. This project demonstrates SRE/DevOps practice. Read SPEC.md for scope.
 - `infra/`: Terraform for EC2, S3 backups, IAM, and a billing alarm.
 - `scripts/`: deploy migration, health check, rollback, backup, baseline stamp, and cron installation.
 - `.github/workflows/`: CI and production deployment; `docs/postmortems/`: incidents.
-- `docker-compose.yml`: local stack; `docker-compose.prod.yml`: SHA-tagged GHCR images.
+- `docker-compose.yml`: local stack; `docker-compose.prod.yml`: SHA-tagged GHCR images behind Caddy (`Caddyfile`, HTTPS).
 
 ## Run locally
 
