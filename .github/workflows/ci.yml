@@ -25,6 +25,10 @@ jobs:
         run: |
           docker compose --env-file .env.production.example -f docker-compose.prod.yml config --quiet
           shellcheck scripts/*.sh
+      - name: Check Caddy configuration
+        run: |
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.4-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
   test:
     name: Pytest

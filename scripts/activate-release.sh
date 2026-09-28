@@ -5,6 +5,7 @@ set -euo pipefail
 # /health passes do .env, `current` and the top-level links move to it. If the check fails,
 # the previous release is started again and stays current.
 IMAGE=ghcr.io/dansom0/irish-rail-tracker
+SITE=dublinrailtracker.duckdns.org
 
 pull=false
 if [[ ${1:-} == --pull ]]; then
@@ -25,6 +26,16 @@ compose() {
   local release=$1
   shift
   docker compose --env-file .env -f "releases/$release/docker-compose.prod.yml" "$@" < /dev/null
+}
+
+# Releases with a Caddyfile serve HTTPS through Caddy and redirect plain HTTP, so check the
+# site name through Caddy on this host. Older releases publish the web app on port 80.
+health() {
+  if [[ -f releases/$1/Caddyfile ]]; then
+    "$SCRIPT_DIR/healthcheck.sh" --resolve "$SITE:443:127.0.0.1" "https://$SITE/health"
+  else
+    "$SCRIPT_DIR/healthcheck.sh" http://localhost/health
+  fi
 }
 
 if [[ ! -f releases/$target/docker-compose.prod.yml || ! -d releases/$target/scripts ]]; then
@@ -60,14 +71,14 @@ elif ! docker image inspect "$IMAGE:$target" > /dev/null 2>&1; then
 fi
 # --remove-orphans stops services that the other release's Compose file defines.
 if ! compose "$target" up -d --remove-orphans \
-    || ! "$SCRIPT_DIR/healthcheck.sh" http://localhost/health; then
+    || ! health "$target"; then
   if [[ -z $previous || $previous == "$target" ]]; then
     echo "[release] $target is unhealthy and there is no previous release to restart" >&2
     exit 1
   fi
   echo "[release] $target is unhealthy; restarting $previous" >&2
   IMAGE_TAG=$previous compose "$previous" up -d --remove-orphans
-  "$SCRIPT_DIR/healthcheck.sh" http://localhost/health
+  health "$previous"
   echo "[release] Failed: $previous is running and still current" >&2
   exit 1
 fi
@@ -80,4 +91,10 @@ for path in docker-compose.prod.yml scripts; do
   fi
   ln -sfn "current/$path" "$path"
 done
+# Compose files run through the top-level link look for ./Caddyfile beside it.
+if [[ -f releases/$target/Caddyfile ]]; then
+  ln -sfn current/Caddyfile Caddyfile
+else
+  rm -f Caddyfile
+fi
 echo "[release] Healthy; current is $target"
