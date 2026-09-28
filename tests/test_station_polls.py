@@ -275,7 +275,7 @@ def test_ingestion_reports_station_errors_without_failing_and_empty_is_healthy(
     response = client.get("/health/ingestion")
     assert response.status_code == 200
     assert response.get_json()["stations"] == {"ok": 1, "empty": 1, "error": 1, "awaiting_first_poll": 1}
-    assert client.get("/health").get_json() == {"database": "connected", "status": "ok"}
+    assert client.get("/health").get_json() == {"database": "connected", "status": "ok", "release": None}
 
 
 def test_ingestion_is_unhealthy_when_the_database_is_unreachable(client, monitored, monkeypatch):

@@ -509,3 +509,167 @@ def test_stamp_refuses_a_schema_missing_the_upsert_constraint(database_server):
     assert result.returncode != 0
     assert "uq_observation_train is missing" in result.stderr
     assert tables(url) == {"observations"}
+
+
+# The deploy workflow's "Pull and start release" step, run as GitHub Actions would, with ssh
+# running the remote command locally. Every Compose call in this docker reads its stdin, as
+# `docker compose run` does, and logs how many bytes it got: a remote script piped to
+# `bash -s` must survive that.
+DEPLOY = "c" * 40
+STDIN_DOCKER = '''
+bytes=0
+if [[ $1 == compose ]]; then bytes=$(cat | wc -c | tr -d ' '); fi
+if [[ $1 == login ]]; then cat > /dev/null; fi
+printf '%s %s %s\\n' "${IMAGE_TAG:-}" "$bytes" "$*" >> "$CHECK_DIR/docker.log"
+if [[ $1 == image && $2 == inspect ]]; then exit 0; fi
+if [[ " $* " == *" alembic current "* ]]; then echo "0002_station_polls (head)"; fi
+if [[ " $* " == *" up -d --remove-orphans "* ]]; then printf '%s' "$IMAGE_TAG" > "$CHECK_DIR/running.tag"; fi
+exit 0
+'''
+
+
+def workflow_step(name):
+    """The run script of a step in the deploy workflow, as the runner executes it."""
+    lines = (ROOT / ".github" / "workflows" / "deploy.yml").read_text().splitlines()
+    start = lines.index(f"      - name: {name}")
+    run_line = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    body = []
+    for line in lines[run_line + 1:]:
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        body.append(line[10:])
+    return "\n".join(body) + "\n"
+
+
+@pytest.fixture
+def deploy_step(server, monkeypatch, tmp_path):
+    """Run the step against the fixture server, deploying DEPLOY; return the result."""
+    incoming = server / "releases" / f".incoming-{DEPLOY}"
+    shutil.copytree(ROOT / "scripts", incoming / "scripts")
+    shutil.copy(ROOT / "docker-compose.prod.yml", incoming)
+    monkeypatch.setenv("HEALTHY", f"{OLD} {NEW} {DEPLOY}")
+    command(server, "docker", STDIN_DOCKER)
+    command(server, "ssh", 'exec bash -c "${@: -1}"')  # The remote command, run locally.
+    command(server, "crontab", '[[ $1 == -l ]] && exit 0; cp "$1" "$CHECK_DIR/crontab"')
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    for name, value in {"APP_DIR": server, "DEPLOY_SHA": DEPLOY, "EC2_USER": "ubuntu",
+                        "EC2_HOST": "203.0.113.10", "GH_TOKEN": "token", "GITHUB_ACTOR": "ci",
+                        "RUNNER_TEMP": runner}.items():
+        monkeypatch.setenv(name, str(value))
+
+    def run_step():
+        return subprocess.run(["bash", "-c", workflow_step("Pull and start release")], cwd="/",
+                              capture_output=True, text=True, timeout=20, check=False)
+
+    return server, incoming, run_step
+
+
+def test_deploy_step_runs_every_step_after_migrate_and_confirms_activation(deploy_step):
+    server, _, run_step = deploy_step
+    result = run_step()
+    assert result.returncode == 0, result.stdout + result.stderr
+    for line in ("[migrate] Revision after: 0002_station_polls (head)",
+                 f"[release] Healthy; current is {DEPLOY}", "[cron] Backup scheduled",
+                 f"[images] Kept {DEPLOY}"):
+        assert line in result.stdout
+    assert os.readlink(server / "current") == f"releases/{DEPLOY}"
+    assert (server / "running.tag").read_text() == DEPLOY
+    calls = docker_calls(server)
+    assert any(" image prune -f" in call for call in calls)
+    assert any(" logout ghcr.io" in call for call in calls)
+    compose = [call for call in calls if " compose " in call]
+    assert compose and all(call.split(" ", 2)[1] == "0" for call in compose)  # No stdin read.
+
+
+def test_deploy_step_survives_a_step_that_reads_stdin(deploy_step):
+    _, incoming, run_step = deploy_step
+    (incoming / "scripts" / "migrate.sh").write_text(
+        'cat > /dev/null\necho "[migrate] read all of stdin"\n')
+    result = run_step()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[migrate] read all of stdin" in result.stdout
+    assert f"[release] Healthy; current is {DEPLOY}" in result.stdout
+    assert "[cron] Backup scheduled" in result.stdout
+
+
+def test_deploy_step_fails_unless_activation_reports_the_release(deploy_step):
+    server, incoming, run_step = deploy_step
+    (incoming / "scripts" / "activate-release.sh").write_text('echo "[release] skipped"\n')
+    result = run_step()
+    assert result.returncode != 0
+    assert f"::error::The server did not report {DEPLOY} as the healthy current release" in result.stdout
+    assert os.readlink(server / "current") == f"releases/{NEW}"
+
+
+def test_deploy_step_fails_when_the_new_release_is_unhealthy(deploy_step, monkeypatch):
+    server, _, run_step = deploy_step
+    monkeypatch.setenv("HEALTHY", f"{OLD} {NEW}")
+    result = run_step()
+    assert result.returncode != 0
+    assert f"{NEW} is running and still current" in result.stdout
+    assert "[cron]" not in result.stdout
+    assert os.readlink(server / "current") == f"releases/{NEW}"
+
+
+@pytest.mark.parametrize("script,args", [
+    ("migrate.sh", (NEW,)),
+    ("activate-release.sh", ("--pull", NEW)),
+    ("rollback.sh", (OLD,)),
+])
+def test_compose_calls_never_read_stdin(server, script, args):
+    command(server, "docker", STDIN_DOCKER)
+    result = subprocess.run(["bash", str(server / "releases" / NEW / "scripts" / script), *args],
+                            input="the rest of a piped deploy script\n", cwd="/",
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 0, result.stderr
+    compose = [call for call in docker_calls(server) if " compose " in call]
+    assert compose and all(call.split(" ", 2)[1] == "0" for call in compose)
+
+
+def test_stdin_docker_detects_a_compose_call_that_reads_stdin(server):
+    """Control for the checks above: without a redirect, the stub reports the bytes it read."""
+    command(server, "docker", STDIN_DOCKER)
+    subprocess.run(["bash", "-c", "docker compose ps"], input="leftover\n", text=True,
+                   timeout=10, check=True)
+    assert docker_calls(server)[0].split(" ", 2)[1] == "9"
+
+
+def release_curl(deployment, *bodies):
+    """curl returns HTTP 200 with each body in turn, then repeats the last one."""
+    for index, body in enumerate(bodies):
+        (deployment / f"body{index}").write_text(body)
+    command(deployment, "curl", f'''
+count=$(cat "$CHECK_DIR/attempts" 2>/dev/null || echo 0)
+echo $((count + 1)) > "$CHECK_DIR/attempts"
+index=$(( count < {len(bodies) - 1} ? count : {len(bodies) - 1} ))
+while [[ $1 != --output ]]; do shift; done
+cp "$CHECK_DIR/body$index" "$2"
+printf 200
+''')
+
+
+def test_healthcheck_waits_for_the_expected_release(deployment):
+    release_curl(deployment, f'{{"release":"{OLD}","status":"ok"}}',
+                 f'{{"database":"connected","release":"{NEW}","status":"ok"}}')
+    result = run(deployment, "healthcheck.sh", "--release", NEW, "http://localhost/health")
+    assert result.returncode == 0, result.stderr
+    assert f"HTTP 200 but release is {OLD}; retrying" in result.stdout
+    assert f"healthy; release {NEW}" in result.stdout
+
+
+@pytest.mark.parametrize("body", ['{"database":"connected","status":"ok"}',
+                                  '{"release":null,"status":"ok"}',
+                                  f'{{"release":"{OLD}","status":"ok"}}'])
+def test_healthcheck_fails_while_another_release_serves(deployment, body):
+    release_curl(deployment, body)
+    result = run(deployment, "healthcheck.sh", "--release", NEW, "http://localhost/health")
+    assert result.returncode != 0
+    assert f"did not return HTTP 200 from release {NEW}" in result.stderr
+
+
+def test_production_compose_reports_the_image_tag_as_the_release():
+    compose = (ROOT / "docker-compose.prod.yml").read_text()
+    web = compose[compose.index("  web:"):compose.index("  worker:")]
+    assert "RELEASE_SHA: ${IMAGE_TAG:-}" in web
+    assert '--release "$DEPLOY_SHA"' in (ROOT / ".github" / "workflows" / "deploy.yml").read_text()

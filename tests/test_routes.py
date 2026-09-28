@@ -100,7 +100,12 @@ def record_poll(app, clock):
 def test_health_reports_database_connectivity(client):
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.get_json() == {"database": "connected", "status": "ok"}
+    assert response.get_json() == {"database": "connected", "status": "ok", "release": None}
+
+
+def test_health_reports_the_running_release(app, client, monkeypatch):
+    monkeypatch.setitem(app.config, "RELEASE_SHA", "b" * 40)
+    assert client.get("/health").get_json()["release"] == "b" * 40
 
 
 def test_health_reports_database_disconnection(client, monkeypatch):
@@ -110,7 +115,7 @@ def test_health_reports_database_disconnection(client, monkeypatch):
     monkeypatch.setattr(db.session, "execute", raise_database_error)
     response = client.get("/health")
     assert response.status_code == 503
-    assert response.get_json() == {"database": "disconnected", "status": "unhealthy"}
+    assert response.get_json() == {"database": "disconnected", "status": "unhealthy", "release": None}
 
 
 @pytest.mark.parametrize("delay,label", [(-2, "2 min early"), (0, "On time"), (1, "1 min late"),

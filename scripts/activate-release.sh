@@ -20,10 +20,11 @@ target=$1
 source "$(dirname "${BASH_SOURCE[0]}")/app-dir.sh"
 trap 'echo "[release] Failed; inspect docker compose logs" >&2' ERR
 
+# Deploy feeds its remote script to `bash -s` on stdin; Compose must not read the rest of it.
 compose() {
   local release=$1
   shift
-  docker compose --env-file .env -f "releases/$release/docker-compose.prod.yml" "$@"
+  docker compose --env-file .env -f "releases/$release/docker-compose.prod.yml" "$@" < /dev/null
 }
 
 if [[ ! -f releases/$target/docker-compose.prod.yml || ! -d releases/$target/scripts ]]; then

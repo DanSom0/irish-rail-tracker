@@ -38,3 +38,5 @@ class Config:
     # Train positions are fetched during a web request, so a hung feed must not hold a Gunicorn worker for long.
     TRAINS_REQUEST_TIMEOUT_SECONDS = float(os.getenv("TRAINS_REQUEST_TIMEOUT_SECONDS", "3"))
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # The commit SHA of the running release, set by production Compose from IMAGE_TAG.
+    RELEASE_SHA = os.getenv("RELEASE_SHA") or None

@@ -170,13 +170,14 @@ def dublin_time(value):
 
 @dashboard.get("/health")
 def health():
-    """Report whether the application can reach PostgreSQL."""
+    """Report whether the application can reach PostgreSQL, and which release is serving."""
+    release = current_app.config["RELEASE_SHA"]
     try:
         db.session.execute(text("SELECT 1"))
     except Exception:
         current_app.logger.exception("database health check failed")
-        return jsonify(status="unhealthy", database="disconnected"), 503
-    return jsonify(status="ok", database="connected")
+        return jsonify(status="unhealthy", database="disconnected", release=release), 503
+    return jsonify(status="ok", database="connected", release=release)
 
 
 def _max_update_age():

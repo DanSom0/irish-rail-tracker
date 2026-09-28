@@ -17,8 +17,9 @@ IMAGE=ghcr.io/dansom0/irish-rail-tracker
 source "$(dirname "${BASH_SOURCE[0]}")/app-dir.sh"
 trap 'echo "[migrate] Failed; the running release was not changed" >&2' ERR
 
+# Deploy feeds its remote script to `bash -s` on stdin; Compose must not read the rest of it.
 compose() {
-  docker compose --env-file .env -f "releases/$target/docker-compose.prod.yml" "$@"
+  docker compose --env-file .env -f "releases/$target/docker-compose.prod.yml" "$@" < /dev/null
 }
 alembic() {
   compose run --rm --no-deps -T web alembic "$@"
