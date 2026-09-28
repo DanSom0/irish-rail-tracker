@@ -17,6 +17,9 @@ worker. This project demonstrates SRE/DevOps practice. Read SPEC.md for scope.
 
 Copy `.env.example` to `.env` if absent, then `docker compose up --build`; the `migrate` service
 runs `alembic upgrade head` before web and worker start.
+A local database created before migrations has tables but no Alembic revision, so `migrate` stops:
+keep its data with `docker compose run --rm migrate alembic stamp 0001_baseline`, or start again
+with `docker compose down -v`.
 Dashboard: http://localhost:8000; health: http://localhost:8000/health.
 
 ## Checks
