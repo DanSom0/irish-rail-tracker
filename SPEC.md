@@ -5,7 +5,7 @@ commits, PRs, Actions, README) should look like a professional engineer's.
 
 ## Status
 The planned PRs 1 to 7 below are merged, and the service runs in
-production at http://54.228.205.197. Later work came from a read-only
+production at https://dublinrailtracker.duckdns.org. Later work came from a read-only
 audit (26 Sep 2026) and from incidents; since then:
 - Alembic migrations own the schema (baseline `0001_baseline`, then
   `0002_station_polls`).
@@ -23,7 +23,7 @@ Terraform, single AWS EC2 instance (Ubuntu).
 
 ## Data source
 Irish Rail realtime API (XML, no key needed):
-http://api.irishrail.ie/realtime/realtime.asmx
+https://api.irishrail.ie/realtime/realtime.asmx
 - getStationDataByCodeXML for a configurable list of stations. The
   default list of 20 Dublin-area stations lives in app/config.py
   (`DEFAULT_STATION_CODES`); STATION_CODES overrides it, and production
@@ -78,7 +78,7 @@ http://api.irishrail.ie/realtime/realtime.asmx
   backend config, not hardcoded).
 - Provisions:
   - EC2 (Ubuntu, t3.micro) with Elastic IP
-  - Security group: 22 open with key-only auth, 80 open
+  - Security group: 22 open with key-only auth, 80 and 443 open
   - Key pair from my existing public key
   - Private S3 bucket for database backups, 7-day lifecycle expiry
   - IAM instance role allowing the instance to write to that bucket only
@@ -91,10 +91,14 @@ http://api.irishrail.ie/realtime/realtime.asmx
 
 ## Deployment
 - docker-compose.prod.yml: uses the GHCR image (no build), restart
-  policies, web on port 80, persistent Postgres volume.
+  policies, persistent Postgres volume. Caddy is the only service
+  that publishes ports (80 and 443): it serves
+  https://dublinrailtracker.duckdns.org with a Let's Encrypt
+  certificate kept in a named volume, proxies to web, and redirects
+  all HTTP, including the bare IP, to that URL.
 - deploy.yml: on push to main, after CI passes. Build image, push to
   ghcr.io tagged with the commit SHA (and `latest`, which the server
-  does not use), copy that commit's Compose file and
+  does not use), copy that commit's Compose file, Caddyfile and
   scripts to the server as a release bundle, run `alembic upgrade head`
   with the new image, then start the release. It becomes current only
   after the server-side /health check passes; otherwise the previous
