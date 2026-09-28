@@ -12,6 +12,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  # Web and worker start once the schema is at the newest migration.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-irishrail}:${POSTGRES_PASSWORD:-irishrail}@db:5432/${POSTGRES_DB:-irishrail}
+    depends_on:
+      db:
+        condition: service_healthy
   web:
     build: .
     environment:
@@ -20,8 +29,8 @@ services:
     ports:
       - "${WEB_PORT:-8000}:8000"
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
   worker:
     build: .
     command: ["python", "-m", "app.worker"]
@@ -31,7 +40,7 @@ services:
       FETCH_INTERVAL_MINUTES: ${FETCH_INTERVAL_MINUTES:-5}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 volumes:
   postgres_data:

@@ -26,6 +26,7 @@ docker run --rm -d --name irishrail-review-postgres -p 127.0.0.1:55433:5432 -e P
 until docker exec irishrail-review-postgres pg_isready -U irishrail -d irishrail_review; do sleep 1; done
 export DATABASE_URL=postgresql+psycopg://irishrail:irishrail@localhost:55433/irishrail_review
 export IRISH_RAIL_TRAINS_API_URL=http://127.0.0.1:8765/getCurrentTrainsXML
+alembic upgrade head
 python -m tests.browser.seed
 python tests/browser/upstream.py &
 flask --app wsgi run --port 8001 &
