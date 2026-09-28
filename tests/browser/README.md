@@ -35,7 +35,7 @@ flask --app wsgi run --port 8001 &
 
 The review exits non-zero if any check fails. Screenshots go to `tests/browser/shots/`.
 Set `ONLY=webkit-375-dark` (browser, width and scheme) to run a single combination.
-Station readings count as recent for 10 minutes, so re-run `python -m tests.browser.seed`
-if the stack has been up longer than that.
+Seeded station boards are marked stale 15 minutes after their poll time, so re-run
+`python -m tests.browser.seed` if the stack has been up longer than that.
 
 Afterwards, stop the background jobs and run `docker stop irishrail-review-postgres`.

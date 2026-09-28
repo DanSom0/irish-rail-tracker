@@ -22,10 +22,10 @@
   </dl>
   {% else %}{{ empty_state("Current punctuality is not available because there are no recent readings.") }}{% endif %}
   <div class="network-meta">
-    <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}{% if coverage.reporting < coverage.total %} · Limited coverage{% endif %}{% if not network.trains and last_updated and age_minutes >= 10 %} · Latest board stale{% endif %}</p>
+    <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}{% if coverage.reporting < coverage.total %} · Limited coverage{% endif %}{% if network.stale %} · {{ network.stale }} station board{{ '' if network.stale == 1 else 's' }} not current{% endif %}</p>
     <details class="figures-details"><summary>About these figures</summary>
       <p>Current figures: based on {{ network.trains }} train{{ '' if network.trains == 1 else 's' }}{% if network.total %} across {{ network.total }} monitored station{{ '' if network.total == 1 else 's' }}{% else %}; the selected station is not currently monitored{% endif %}. Today: based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}.</p>
-      <p>Coverage means a monitored station has supplied a reading in the last 30 minutes. Current services use only each station's latest stored poll when it is at most 10 minutes old.</p>
+      <p>Coverage means a monitored station's latest poll succeeded in the last 15 minutes, including a poll that returned no services. Current services use only each station's latest successful poll.</p>
       <p>On time includes early trains and trains up to 1 minute late. Today's figures count each train once using its latest stored reading for the day, even after it leaves the board.</p>
     </details>
   </div>

@@ -76,6 +76,8 @@ dd { font-size: 22px; font-weight: 700; line-height: 1.3; }
 .network-metrics strong { font-size: 44px; }
 .unit { font-size: 12px; font-weight: 400; color: var(--muted); }
 .coverage { font-size: 13px; color: var(--muted); }
+.coverage.stale { color: var(--minor); font-weight: 600; }
+.board-warning { margin-block: var(--space-1); padding: 6px 10px; border-radius: 6px; color: var(--minor); background: var(--minor-bg); font-weight: 600; }
 .limited { background: var(--soft); color: var(--muted); border-radius: 3px; padding: 4px 8px; }
 .freshness { color: var(--muted); font-size: 13px; margin-block: var(--space-1); }
 .network-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin-top: var(--space-2); }

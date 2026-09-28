@@ -12,7 +12,7 @@ from sqlalchemy.pool import NullPool
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import Observation
+from app.models import Observation, StationPoll, WorkerHeartbeat
 
 
 class TestConfig(Config):
@@ -43,7 +43,8 @@ def app():
 def clear_observations(app):
     """Keep each test independent while retaining the test schema."""
     with app.app_context():
-        db.session.execute(delete(Observation))
+        for model in (Observation, StationPoll, WorkerHeartbeat):
+            db.session.execute(delete(model))
         db.session.commit()
     yield
     with app.app_context():

@@ -17,7 +17,7 @@ from sqlalchemy import Date, DateTime, Integer, case, cast, func, text, tuple_
 
 from app.disk import check_disk_usage
 from app.extensions import db
-from app.models import Observation
+from app.models import Observation, StationPoll, WorkerHeartbeat
 from app.stations import (
     PLACE_NAMES,
     STATION_ALIASES,
@@ -30,7 +30,10 @@ from app.train_positions import current_trains
 
 dashboard = Blueprint("dashboard", __name__)
 DUBLIN = ZoneInfo("Europe/Dublin")
-CURRENT_WINDOW = timedelta(minutes=10)
+# A station's board is stale once its latest successful poll is this old, or its last poll failed.
+STALE_AFTER = timedelta(minutes=15)
+# /health/ingestion is ready while the worker completed a cycle within this time.
+HEARTBEAT_MAX_AGE = timedelta(minutes=15)
 
 
 @dashboard.app_template_filter("station_name")
@@ -179,6 +182,37 @@ def health():
     return jsonify(status="ok", database="connected")
 
 
+@dashboard.get("/health/ingestion")
+def ingestion_health():
+    """Readiness of data collection: 503 unless the worker completed a cycle recently.
+
+    Station errors are reported but do not fail the check on their own, and an empty
+    board (normal overnight) is a successful poll.
+    """
+    now = datetime.now(UTC)
+    monitored = station_codes(current_app.config["STATION_CODES"])
+    try:
+        completed_at = db.session.scalar(db.select(WorkerHeartbeat.last_cycle_completed_at))
+        polls = _poll_states(monitored, now)
+    except Exception:
+        current_app.logger.exception("ingestion health check failed")
+        return jsonify(status="unhealthy", database="disconnected"), 503
+    stations = {"ok": 0, "empty": 0, "error": 0, "awaiting_first_poll": 0}
+    for poll in polls.values():
+        stations[poll["outcome"]] += 1
+    ready = completed_at is not None and now - completed_at < HEARTBEAT_MAX_AGE
+    body = {
+        "status": "ok" if ready else "not ready",
+        "heartbeat": {
+            "last_cycle_completed_at": completed_at.isoformat() if completed_at else None,
+            "age_seconds": max(0, int((now - completed_at).total_seconds())) if completed_at else None,
+            "max_age_seconds": int(HEARTBEAT_MAX_AGE.total_seconds()),
+        },
+        "stations": stations,
+    }
+    return jsonify(body), 200 if ready else 503
+
+
 def _observations():
     """Read legacy alias rows as one station, keeping the newest train reading."""
     station = case(STATION_ALIASES, value=Observation.station, else_=Observation.station)
@@ -191,39 +225,81 @@ def _observations():
                Observation.fetched_at.desc(), Observation.id.desc()).subquery().c
 
 
-def _station_fetches(observations):
-    return db.select(
-        observations.station,
-        func.max(observations.fetched_at).label("last_fetch"),
-    ).group_by(observations.station).subquery()
+def _successful_polls(monitored_stations):
+    """Each monitored station's latest successful poll."""
+    return db.select(StationPoll.station_code, StationPoll.succeeded_at).where(
+        StationPoll.station_code.in_(monitored_stations), StationPoll.succeeded_at.is_not(None),
+    ).subquery()
 
 
-def _current_station_poll(observations, station_fetches, cutoff):
-    """Latest stored poll for the station, seen within the rolling 10-minute window."""
-    return (observations.fetched_at == station_fetches.c.last_fetch) & (
-        observations.fetched_at >= cutoff
+def _current_station_poll(observations, polls):
+    """Exactly the readings saved by the station's latest successful poll: they share its time."""
+    return (observations.station == polls.c.station_code) & (
+        observations.fetched_at == polls.c.succeeded_at
     )
 
 
-def _current_station_rows(monitored_stations, now):
-    """Latest stored station poll, if seen in the last 10 minutes."""
+def _poll_states(monitored_stations, now):
+    """Latest poll outcome per monitored station; no record yet means awaiting a first poll."""
+    polls = {poll.station_code: poll for poll in db.session.scalars(
+        db.select(StationPoll).where(StationPoll.station_code.in_(monitored_stations))
+    )}
+    states = {}
+    for code in monitored_stations:
+        poll = polls.get(code)
+        succeeded_at = poll.succeeded_at if poll else None
+        states[code] = {
+            "outcome": poll.outcome if poll else "awaiting_first_poll",
+            "attempted_at": poll.attempted_at if poll else None,
+            "succeeded_at": succeeded_at,
+            "train_count": poll.train_count if poll else None,
+            "error_reason": poll.error_reason if poll else None,
+            # Data from an earlier successful poll is shown, but marked as not current.
+            "stale": succeeded_at is not None and (
+                poll.outcome == "error" or now - succeeded_at >= STALE_AFTER
+            ),
+        }
+    return states
+
+
+@dashboard.app_template_filter("poll_text")
+def poll_text(poll):
+    """One wording for a station's latest poll, shared by the status page, boards and map API."""
+    outcome = poll["outcome"]
+    if outcome == "awaiting_first_poll":
+        return "Awaiting first poll"
+    if outcome == "error":
+        if poll["succeeded_at"] is None:
+            return "Update failed; no data yet"
+        return f"Update failed; showing data from {poll['succeeded_at'].astimezone(DUBLIN):%H:%M}"
+    text = ("No services returned" if outcome == "empty"
+            else f"OK, {poll['train_count']} train{'' if poll['train_count'] == 1 else 's'}")
+    if poll["stale"]:
+        text += f"; not updated since {poll['succeeded_at'].astimezone(DUBLIN):%H:%M}"
+    return text
+
+
+def _poll_json(poll):
+    return {
+        **{key: value.isoformat() if isinstance(value, date) else value
+           for key, value in poll.items()},
+        "text": poll_text(poll),
+    }
+
+
+def _current_station_rows(monitored_stations):
+    """Each monitored station's current board: the readings of its latest successful poll."""
     observations = _observations()
-    station_fetches = _station_fetches(observations)
-    rows = db.session.execute(db.select(*observations).join(
-        station_fetches, observations.station == station_fetches.c.station,
-    ).where(
-        observations.station.in_(monitored_stations),
-        _current_station_poll(observations, station_fetches, now - CURRENT_WINDOW),
+    polls = _successful_polls(monitored_stations)
+    return db.session.execute(db.select(*observations).join(
+        polls, _current_station_poll(observations, polls),
     ).order_by(observations.station, observations.scheduled_time, observations.train_code)).all()
-    latest = dict(db.session.execute(db.select(
-        station_fetches.c.station, station_fetches.c.last_fetch,
-    ).where(station_fetches.c.station.in_(monitored_stations))).all())
-    return rows, latest
 
 
 def _network_stations(now):
     monitored = station_codes(current_app.config["STATION_CODES"])
-    rows, latest = _current_station_rows(monitored, now)
+    rows = _current_station_rows(monitored)
+    polls = _poll_states(monitored, now)
     by_station = {code: [] for code in monitored}
     for row in rows:
         expected, day_offset = expected_time(row)
@@ -247,13 +323,16 @@ def _network_stations(now):
         status = ("no recent data" if average is None else "on time" if average <= 1
                   else "minor delay" if average < 6 else "significant delay")
         coordinates = STATION_COORDINATES.get(code)
+        succeeded_at = polls[code]["succeeded_at"]
         stations.append({
             "code": code, "name": station_name(code),
             "lat": coordinates[0] if coordinates else None,
             "lon": coordinates[1] if coordinates else None,
             "status": status,
             "average_reported_delay": average,
-            "latest_observation_at": latest[code].isoformat() if code in latest else None,
+            # The time of the board shown: the latest successful poll, even an empty one.
+            "latest_observation_at": succeeded_at.isoformat() if succeeded_at else None,
+            "poll": _poll_json(polls[code]),
             "current_trains": trains,
         })
     return stations
@@ -266,10 +345,10 @@ def _context(station="", *, strict=False):
     now = datetime.now(UTC)
     local_now = now.astimezone(DUBLIN)
     cutoff = now - timedelta(minutes=30)
-    current_cutoff = now - CURRENT_WINDOW
     recent = observations.fetched_at.between(cutoff, now)
-    station_fetches = _station_fetches(observations)
-    current = _current_station_poll(observations, station_fetches, current_cutoff)
+    monitored_stations = station_codes(current_app.config["STATION_CODES"])
+    polls = _successful_polls(monitored_stations)
+    current = _current_station_poll(observations, polls)
     yesterday = local_now.date() - timedelta(days=1)
     today = observations.train_date == local_now.date().isoformat()
     rows = db.session.execute(db.select(
@@ -280,10 +359,10 @@ def _context(station="", *, strict=False):
         func.count().filter(current).label("current_readings"),
         func.avg(observations.delay_minutes).filter(current).label("average_delay"),
         func.avg(observations.delay_minutes).filter(today).label("today_average"),
-    ).join(station_fetches, observations.station == station_fetches.c.station)
+    ).outerjoin(polls, observations.station == polls.c.station_code)
         .group_by(observations.station).order_by(observations.station)).all()
     observed = {row.station: row for row in rows}
-    monitored_stations = station_codes(current_app.config["STATION_CODES"])
+    poll_states = _poll_states(monitored_stations, now)
     configured = set(monitored_stations)
     stations = sort_stations(configured | observed.keys())
     if station not in stations and station not in STATION_NAMES:
@@ -295,9 +374,10 @@ def _context(station="", *, strict=False):
     for code in stations:
         row = observed.get(code)
         last_fetch = row.last_fetch if row else None
+        poll = poll_states.get(code)
         station_status.append({
             "station": code, "monitored": code in configured, "last_fetch": last_fetch,
-            "stale": code in configured and service_hours and (last_fetch is None or last_fetch < cutoff),
+            "poll": poll, "stale": bool(poll and poll["stale"]),
             "readings": row.readings if row else 0,
             "current_readings": row.current_readings if row else 0,
             "average_delay": row.average_delay if row else None,
@@ -309,9 +389,15 @@ def _context(station="", *, strict=False):
     readings = sum(row.current_readings for row in selected)
     active = [row for row in selected if row.current_readings]
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
-    last_updated = max((row.last_fetch for row in selected), default=None)
+    # Monitored boards are as fresh as their latest successful poll, even an empty one.
+    scope = [station] if station in configured else [] if station else monitored_stations
+    last_updated = max(
+        (poll_states[code]["succeeded_at"] for code in scope if poll_states[code]["succeeded_at"]),
+        default=None,
+    ) if scope else max((row.last_fetch for row in selected), default=None)
     coverage = {
-        "reporting": sum(bool(observed[code].readings) for code in configured if code in observed),
+        "reporting": sum(poll_states[code]["outcome"] in ("ok", "empty") and not poll_states[code]["stale"]
+                         for code in configured),
         "total": len(configured),
     }
     remembered = canonical_station(request.cookies.get("station", ""))
@@ -320,9 +406,8 @@ def _context(station="", *, strict=False):
         "yesterday": yesterday.isoformat(),
         "yesterday_url": url_for("dashboard.route_averages", day="yesterday", station=station)
         if any(row.yesterday_readings for row in selected) else None,
-        "empty_reason": "Overnight service can be sparse; empty fetches and collection gaps are not recorded."
-        if not service_hours else "Coverage is limited to stored readings; empty fetches and collection gaps are not recorded.",
-
+        "empty_reason": "Overnight service can be sparse; see Data status for each station's latest update."
+        if not service_hours else "See Data status for each station's latest update.",
         "remembered_station": remembered if remembered in stations or remembered in STATION_NAMES else "",
         "stations": stations, "station": station, "station_status": station_status,
         "monitored_stations": monitored_stations,
@@ -339,9 +424,11 @@ def _context(station="", *, strict=False):
             "readings": readings,
             "reporting": len(active) if not station or station in configured else 0,
             "total": int(station in configured) if station else len(configured),
+            "stale": sum(poll_states[code]["stale"] for code in scope),
         },
+        "station_poll": poll_states.get(station),
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
-        "today_date": local_now.date().isoformat(), "current_cutoff": current_cutoff,
+        "today_date": local_now.date().isoformat(),
         "now": now,
     }
     current = _train_summary(context, recent=True)
@@ -357,11 +444,8 @@ def _latest_readings(context, *, recent=False):
     observations = _observations()
     query = db.select(*observations)
     if recent:
-        station_fetches = _station_fetches(observations)
-        query = query.join(station_fetches, observations.station == station_fetches.c.station)
-        query = query.where(_current_station_poll(
-            observations, station_fetches, context["current_cutoff"],
-        ))
+        polls = _successful_polls(context["monitored_stations"])
+        query = query.join(polls, _current_station_poll(observations, polls))
     else:
         query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
     if context["station"]:
