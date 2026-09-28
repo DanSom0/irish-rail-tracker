@@ -34,7 +34,7 @@ Set these secrets in GitHub's **production** environment: `EC2_HOST`, `EC2_USER`
 
 CI runs on pull requests and pushes to `main`. It checks Python with Ruff, runs pytest against PostgreSQL 16, checks Terraform formatting and validity, and builds the app image. It also checks the production Compose file, validates the `Caddyfile` with Caddy, and checks the shell scripts with ShellCheck.
 
-After CI passes for a push to this repository's `main`, Deploy builds the tested commit. It publishes the image to GHCR with both its full commit SHA and `latest` as tags. Deploys run one at a time. You can also start Deploy manually on `main`.
+After CI passes for a push to this repository's `main`, Deploy first checks that port 443 on `dublinrailtracker.duckdns.org` accepts a TCP connection from the runner within 10 seconds. If the connection attempt times out, as it does while the security group does not allow port 443, the deploy fails before it builds or changes anything, and the running release stays active ([postmortem](postmortems/2026-09-https-port-closed.md)). A refused connection passes: the port is open, and a release from before HTTPS has nothing listening on it until the new release starts Caddy. Deploy then builds the tested commit. It publishes the image to GHCR with both its full commit SHA and `latest` as tags. Deploys run one at a time. You can also start Deploy manually on `main`.
 
 Deploy copies the commit's production Compose file, `Caddyfile` and scripts to the server as a release bundle (see [Server layout](#server-layout)). It first migrates the database with the new image (see [Database migrations](#database-migrations)); if that fails, the deploy stops and the running release is not touched. It then runs [`scripts/activate-release.sh`](../scripts/activate-release.sh) from that bundle, which downloads the SHA-tagged image and starts the services with the bundle's Compose file. It then checks `/health` on the server for up to 60 seconds, through Caddy over HTTPS (see [HTTPS](#https)):
 
@@ -173,7 +173,7 @@ The script switches the image and the release bundle together. It uses the saved
 
 **Ingestion readiness after a rollback:** releases before migration `0002_station_polls` do not update the worker heartbeat or station polls. After rolling back to one of them, `/health/ingestion` reports not ready: the older web app does not serve it (HTTP 404), and the heartbeat it left stops advancing, so it passes the age limit. This does not mean the older worker has stopped: check its logs instead. The readiness signal is only authoritative on releases that include `0002_station_polls`. The tables stay in place; when a newer release is deployed again, its worker records fresh polls on its first cycle.
 
-**Rollback to a release before HTTPS:** such a release has no `Caddyfile` and no Caddy service. Rollback removes the Caddy container and the web app publishes port 80 again, so the site is served over plain HTTP, and `https://` does not answer, until a newer release is deployed. The `caddy_data` volume and its certificate are kept. Browsers that have seen the site's HSTS header (once it is enabled) refuse plain HTTP for its `max-age`.
+**Rollback to a release before HTTPS:** such a release has no `Caddyfile` and no Caddy service. Rollback removes the Caddy container and the web app publishes port 80 again, so the site is served over plain HTTP, and `https://` does not answer, until a newer release is deployed. The `caddy_data` volume and its certificate are kept. Browsers that have seen the site's HSTS header refuse plain HTTP for its `max-age` (five minutes; see [HTTPS](#https)).
 
 A release without a bundle in `releases/` cannot be rolled back to; the script stops before changing anything. If its image is missing and the package is private, sign in to GHCR with read access first. Rollback changes the app version but leaves the database contents, its schema and `.env` settings in place; it never runs migrations (see [Database migrations](#database-migrations)). The next successful deploy replaces that version.
 
@@ -196,7 +196,9 @@ The server-side health check in deploy and rollback connects to Caddy on the ser
 docker compose --env-file .env -f docker-compose.prod.yml logs caddy
 ```
 
-**HSTS** (`Strict-Transport-Security`) is not sent yet. It will be added once HTTPS is verified in production, starting with a short `max-age`.
+**HSTS:** HTTPS responses include `Strict-Transport-Security: max-age=300`, set in the `Caddyfile` site block. After a browser has seen it, it uses HTTPS for the site for five minutes without trying plain HTTP. The short `max-age` limits the effect of a rollback to a release from before HTTPS; it will be raised once the site has served HTTPS reliably for a while. It has no `includeSubDomains` (the site has no subdomains) and no `preload` (a preload list entry is slow to remove).
+
+Changes that affect ports 80 or 443 (the security group in `infra/`, or the Caddy service) must be applied with Terraform before the pull request that depends on them merges, because merging deploys it. Deploy's first step checks that port 443 is reachable (see [Deployment details](#deployment-details)).
 
 ## Backups
 

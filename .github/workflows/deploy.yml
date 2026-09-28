@@ -24,7 +24,7 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     timeout-minutes: 20
     env:
@@ -34,6 +34,21 @@ jobs:
       EC2_USER: ${{ secrets.EC2_USER }}
       SITE_URL: https://dublinrailtracker.duckdns.org
     steps:
+      - name: Check public HTTPS port
+        # Runs before anything is built or changed, so a failure leaves the running release
+        # alone. A security group without port 443 drops the connection attempt, so it times
+        # out (docs/postmortems/2026-09-https-port-closed.md). A refused connection passes: the
+        # port is open, but a release from before HTTPS has nothing listening until Caddy starts.
+        run: |
+          set -euo pipefail
+          host=${SITE_URL#https://}
+          status=0
+          timeout 10 bash -c "exec 3<> /dev/tcp/$host/443" || status=$?
+          if [[ $status == 124 ]]; then
+            echo "::error::Port 443 on $host did not answer from the runner within 10 seconds; check the security group. The running release is unchanged."
+            exit 1
+          fi
+          echo "[preflight] Port 443 on $host is reachable"
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.DEPLOY_SHA }}
