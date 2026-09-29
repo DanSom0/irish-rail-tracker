@@ -233,17 +233,19 @@ def _observations():
                Observation.fetched_at.desc(), Observation.id.desc()).subquery().c
 
 
-def _successful_polls(monitored_stations, *, include_failed=True):
+def _successful_polls(monitored_stations, *, current_at=None):
     """Each monitored station's latest successful poll.
 
-    Network figures pass include_failed=False: a station whose latest poll failed keeps its
-    stale board on its own page but is left out of "right now" aggregates.
+    Network figures pass current_at (now): a station whose latest poll failed, or whose latest
+    successful poll is as old as the age limit, keeps its stale board on its own page but is
+    left out of "right now" aggregates. This matches the "stale" flag in _poll_states.
     """
     query = db.select(StationPoll.station_code, StationPoll.succeeded_at).where(
         StationPoll.station_code.in_(monitored_stations), StationPoll.succeeded_at.is_not(None),
     )
-    if not include_failed:
-        query = query.where(StationPoll.outcome != "error")
+    if current_at is not None:
+        query = query.where(StationPoll.outcome != "error",
+                            StationPoll.succeeded_at > current_at - _max_update_age())
     return query.subquery()
 
 
@@ -404,9 +406,10 @@ def _context(station="", *, strict=False):
     ]
     # Monitored boards are as fresh as their latest successful poll, even an empty one.
     scope = [station] if station in configured else [] if station else monitored_stations
-    # Stations whose latest poll failed stay out of the "right now" network figures.
-    failed = {code for code in scope if poll_states[code]["outcome"] == "error"}
-    active = [row for row in selected if row.current_readings and row.station not in failed]
+    # Stations whose latest poll failed or is too old stay out of the "right now" figures.
+    excluded = {code for code in scope
+                if poll_states[code]["outcome"] == "error" or poll_states[code]["stale"]}
+    active = [row for row in selected if row.current_readings and row.station not in excluded]
     readings = sum(row.current_readings for row in active)
     highest_delay = max(active, key=lambda row: row.average_delay, default=None)
     last_updated = max(
@@ -442,8 +445,7 @@ def _context(station="", *, strict=False):
             "readings": readings,
             "reporting": len(active) if not station or station in configured else 0,
             "total": int(station in configured) if station else len(configured),
-            "excluded": len(failed),
-            "stale": sum(poll_states[code]["stale"] for code in scope if code not in failed),
+            "excluded": len(excluded),
         },
         "station_poll": poll_states.get(station),
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
@@ -458,16 +460,17 @@ def _context(station="", *, strict=False):
     return context
 
 
-def _latest_readings(context, *, recent=False, include_failed=False):
+def _latest_readings(context, *, recent=False, include_stale=False):
     """One latest stored station reading per train/date, within the selected scope.
 
-    Current readings leave out stations whose latest poll failed, unless include_failed
-    (a station's own board, shown as stale).
+    Current readings leave out stations whose latest poll failed or is too old, unless
+    include_stale (a station's own board, shown as stale).
     """
     observations = _observations()
     query = db.select(*observations)
     if recent:
-        polls = _successful_polls(context["monitored_stations"], include_failed=include_failed)
+        polls = _successful_polls(context["monitored_stations"],
+                                  current_at=None if include_stale else context["now"])
         query = query.join(polls, _current_station_poll(observations, polls))
     else:
         query = query.where(observations.train_date == context.get("report_date", context["today_date"]))
@@ -492,8 +495,8 @@ def _train_summary(context, *, recent=False):
     )).one()
 
 
-def _services(context, *, significant=False, include_failed=False):
-    latest = _latest_readings(context, recent=True, include_failed=include_failed).c
+def _services(context, *, significant=False, include_stale=False):
+    latest = _latest_readings(context, recent=True, include_stale=include_stale).c
     query = db.select(*latest)
     if significant:
         query = query.where(latest.delay_minutes >= 2)
@@ -504,7 +507,7 @@ def _services(context, *, significant=False, include_failed=False):
 
 def _next_services(context):
     """Current services not yet expected, ordered with the same conversion as the board."""
-    latest = _latest_readings(context, recent=True, include_failed=True).c
+    latest = _latest_readings(context, recent=True, include_stale=True).c
     # Stored times can include arrivals; only valid local schedules support this view.
     rows = db.session.execute(db.select(*latest).where(
         latest.scheduled_time.op("~")(r"^([01][0-9]|2[0-3]):[0-5][0-9]$"),
@@ -587,7 +590,7 @@ def station_detail(code):
     context = _context(code, strict=True)
     view = "next" if request.args.get("view", "next") == "next" else "delays"
     pagination = (_paginate_rows(_next_services(context)) if view == "next"
-                  else _paginate(_services(context, include_failed=True)))
+                  else _paginate(_services(context, include_stale=True)))
     return render_template(
         "station.html", title=station_name(code), active="stations", **context,
         summary=_train_summary(context), pagination=pagination, view=view,

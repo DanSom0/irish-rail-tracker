@@ -258,10 +258,14 @@ def test_latest_successful_board_stays_visible_and_is_stale_after_fifteen_minute
          "fetched_at": clock.instant - timedelta(minutes=14, seconds=59)},
     )
     home = client.get("/").get_data(as_text=True)
-    assert sorted(row.train_code for row in context["current_delays"]) == ["FRESH", "STALE"]
+    # Exactly the age limit is stale, so that board leaves the "right now" figures.
+    assert [row.train_code for row in context["current_delays"]] == ["FRESH"]
+    network = context["network"]
+    assert (network["trains"], network["average_delay"], network["major"]) == (1, 8, 1)
+    assert (network["readings"], network["reporting"], network["excluded"]) == (1, 1, 1)
+    assert context["highest_delay"].station == "TARA"
     assert context["coverage"]["reporting"] == 1
-    assert context["network"]["stale"] == 1
-    assert "1 station board not current" in home
+    assert "1 station not updating; excluded" in home and "STALE" not in home
     statuses = {row["station"]: row for row in context["station_status"]}
     assert (statuses["CNLLY"]["stale"], statuses["TARA"]["stale"]) == (True, False)
     page = client.get("/stations/CNLLY?view=delays").get_data(as_text=True)
@@ -849,7 +853,8 @@ def test_figure_explanations_are_disclosed_while_headlines_and_warnings_remain_v
     )
     assert "0/20 stations reporting" in before_details
     assert "Updated 16 minutes ago" in before_details
-    assert "Limited coverage" in before_details and "1 station board not current" in before_details
+    assert "Limited coverage" in before_details
+    assert "1 station not updating; excluded" in before_details
     assert "Coverage means" in explanation and "Today: based on 1 train" in explanation
     assert "On time includes early trains" in explanation
     assert home.count('<details class="figures-details">') == 1
@@ -1293,7 +1298,6 @@ def test_failed_stations_are_excluded_from_current_network_figures_but_keep_thei
     network = context["network"]
     assert (network["trains"], network["average_delay"], network["major"]) == (1, 2, 0)
     assert (network["readings"], network["reporting"], network["excluded"]) == (1, 1, 2)
-    assert network["stale"] == 0  # Excluded stations are reported once, as excluded.
     assert context["highest_delay"].station == "CNLLY"
     assert [row.train_code for row in context["current_delays"]] == ["OK1"]
     assert "2 stations not updating; excluded" in home and "FAILED1" not in home
@@ -1357,3 +1361,26 @@ def test_header_mark_matches_the_site_icon(client, dashboard_data):
     assert len(shapes(icon)) == 3
     assert [geometry(s) for s in shapes(header)] == [geometry(s) for s in shapes(icon)]
     assert 'aria-hidden="true"' in header
+
+
+def test_stopped_worker_leaves_no_right_now_figures_but_keeps_boards_and_history(
+    client, dashboard_data, clock,
+):
+    """Every board two hours old, as when the worker stops: nothing is presented as current."""
+    seed, context = dashboard_data
+    old = clock.instant - timedelta(hours=2)
+    seed({"train_code": "LATE1", "delay_minutes": 14, "fetched_at": old},
+         {"train_code": "LATE2", "station": "TARA", "delay_minutes": 7, "fetched_at": old})
+
+    home = client.get("/").get_data(as_text=True)
+    network = context["network"]
+    assert (network["trains"], network["on_time"], network["average_delay"], network["major"]) == (
+        0, None, None, 0)
+    assert (network["reporting"], network["excluded"], context["highest_delay"]) == (0, 2, None)
+    assert context["current_delays"] == []
+    assert "2 stations not updating; excluded" in home and "LATE1" not in home
+    assert context["summary"].trains == 2  # Today's performance keeps the day's readings.
+
+    client.get("/stations/CNLLY?view=delays")
+    assert [row.train_code for row in context["pagination"]["items"]] == ["LATE1"]
+    assert context["station_poll"]["stale"] is True
