@@ -16,5 +16,5 @@
   {% else %}{{ empty_state("Route performance is unavailable because no readings are stored for this day and station selection.") }}{% endif %}
   {% if day == 'yesterday' %}<p class="note"><a href="{{ url_for('dashboard.route_averages', station=station) }}">View today</a></p>{% endif %}
 </section>
-<p class="note below-card">The seen time range comes from scheduled times in stored readings, not a full timetable. A train can be observed at several stations. Each train counts once here, using its latest reading within the selected stations. These are reported delays, not confirmed arrival delays.</p>
+<p class="note below-card">Seen times are scheduled times of tracked trains, not a full timetable. Each train counts once, using its latest reading at the selected stations. These are reported delays, not confirmed arrival delays.</p>
 {% endblock %}

@@ -272,7 +272,7 @@ Check the worker logs for:
 
 Check `backup.log` (and `backup.log.1` after rotation) for upload failures.
 
-The database, release images and logs share the server's root disk. The [`/status` page](https://dublinrailtracker.duckdns.org/status) shows how much of it is used. Above 80%, the web app logs `disk_usage_high` when `/status` loads, and the worker logs it on every fetch cycle. Check the worker logs for it. The figure reads the disk from inside the container; it should match `df -h /` on the server. No observation data is ever deleted to free space.
+The database, release images and logs share the server's root disk. Disk usage is not shown on the site: check it in the logs or with `df -h /` on the server. Above 80%, the worker logs `disk_usage_high` (with `used_percent` and `free_bytes`) on every fetch cycle. The worker reads the disk from inside its container; the figure should match `df -h /`. No observation data is ever deleted to free space.
 
 ## Environment variables
 

@@ -1,4 +1,4 @@
-"""Disk usage check shown on /status and logged by the worker."""
+"""Disk usage check logged by the worker; not shown on the site."""
 
 from types import SimpleNamespace
 

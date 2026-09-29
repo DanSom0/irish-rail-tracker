@@ -16,7 +16,6 @@ from flask import (
 from sqlalchemy import Date, DateTime, Integer, case, cast, func, text, tuple_
 
 from app.config import max_update_age
-from app.disk import check_disk_usage
 from app.extensions import db
 from app.models import Observation, StationPoll, WorkerHeartbeat
 from app.stations import (
@@ -702,8 +701,7 @@ def live_map():
 @dashboard.get("/status")
 def status():
     context = _context()
-    return render_template("status.html", title="Data status", active="status", **context,
-                           disk=check_disk_usage())
+    return render_template("status.html", title="Data status", active="status", **context)
 
 
 @dashboard.route("/favicon.ico")
