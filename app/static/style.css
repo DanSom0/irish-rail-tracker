@@ -302,6 +302,11 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .map-minor, .map-minor-delay { background: var(--minor); border-color: var(--minor); }
 .map-significant, .map-significant-delay { background: var(--major); border-color: var(--major); }
 .map-no-recent-data, .map-no-data { background: transparent; border: 2px dashed var(--muted); }
+.map-no-services { background: transparent; border: 2px solid var(--muted); }
+/* A board kept from a failed or too-old poll: the reading is shown but marked as not current. */
+.map-marker.map-marker-stale { border: 2px dashed var(--minor); }
+.map-marker.map-legend-stale { display: inline-block; width: 28px; height: 16px; padding: 0; box-shadow: none; vertical-align: middle; }
+.map-not-current, .stale-note { color: var(--minor); font-weight: 600; }
 .map-marker { display: flex; align-items: center; justify-content: center; gap: 4px; width: 82px; height: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 4px; box-shadow: 0 1px 4px #0004; cursor: pointer; }
 .map-marker-empty { width: 24px; height: 24px; padding: 2px; }
 .map-marker-delay { font-size: 12px; font-weight: 700; white-space: nowrap; }

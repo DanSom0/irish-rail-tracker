@@ -314,10 +314,18 @@ def _current_station_rows(monitored_stations):
     ).order_by(observations.station, observations.scheduled_time, observations.train_code)).all()
 
 
-def _network_stations(now):
-    monitored = station_codes(current_app.config["STATION_CODES"])
+def _coverage(poll_states):
+    """Monitored stations whose latest poll succeeded within the age limit, even if empty."""
+    return {
+        "reporting": sum(poll["outcome"] in ("ok", "empty") and not poll["stale"]
+                         for poll in poll_states.values()),
+        "total": len(poll_states),
+    }
+
+
+def _network_stations(polls):
+    monitored = list(polls)
     rows = _current_station_rows(monitored)
-    polls = _poll_states(monitored, now)
     by_station = {code: [] for code in monitored}
     for row in rows:
         expected, day_offset = expected_time(row)
@@ -338,10 +346,12 @@ def _network_stations(now):
     for code in monitored:
         trains = by_station[code]
         average = sum(max(0, train["delay"]) for train in trains) / len(trains) if trains else None
-        status = ("no recent data" if average is None else "on time" if average <= 1
-                  else "minor delay" if average < 6 else "significant delay")
-        coordinates = STATION_COORDINATES.get(code)
         succeeded_at = polls[code]["succeeded_at"]
+        # A successful poll with no trains is "no services", not missing data.
+        status = ("on time" if average <= 1 else "minor delay" if average < 6
+                  else "significant delay") if trains else (
+            "no services" if succeeded_at else "no recent data")
+        coordinates = STATION_COORDINATES.get(code)
         stations.append({
             "code": code, "name": station_name(code),
             "lat": coordinates[0] if coordinates else None,
@@ -350,6 +360,8 @@ def _network_stations(now):
             "average_reported_delay": average,
             # The time of the board shown: the latest successful poll, even an empty one.
             "latest_observation_at": succeeded_at.isoformat() if succeeded_at else None,
+            # False when the board shown is from a failed or too-old poll, or there is none.
+            "current": succeeded_at is not None and not polls[code]["stale"],
             "poll": _poll_json(polls[code]),
             "current_trains": trains,
         })
@@ -416,11 +428,7 @@ def _context(station="", *, strict=False):
         (poll_states[code]["succeeded_at"] for code in scope if poll_states[code]["succeeded_at"]),
         default=None,
     ) if scope else max((row.last_fetch for row in selected), default=None)
-    coverage = {
-        "reporting": sum(poll_states[code]["outcome"] in ("ok", "empty") and not poll_states[code]["stale"]
-                         for code in configured),
-        "total": len(configured),
-    }
+    coverage = _coverage(poll_states)
     remembered = canonical_station(request.cookies.get("station", ""))
     context = {
         "coverage": coverage,
@@ -447,7 +455,7 @@ def _context(station="", *, strict=False):
             "total": int(station in configured) if station else len(configured),
             "excluded": len(excluded),
         },
-        "station_poll": poll_states.get(station),
+        "station_poll": poll_states.get(station), "poll_states": poll_states,
         "service_hours": service_hours, "today": local_now.strftime("%d %b %Y"),
         "today_date": local_now.date().isoformat(),
         "now": now,
@@ -665,7 +673,9 @@ def delay_patterns():
 
 @dashboard.get("/api/network")
 def network_api():
-    return jsonify(stations=_network_stations(datetime.now(UTC)))
+    now = datetime.now(UTC)
+    polls = _poll_states(station_codes(current_app.config["STATION_CODES"]), now)
+    return jsonify(coverage=_coverage(polls), stations=_network_stations(polls))
 
 
 @dashboard.get("/api/trains")
@@ -685,7 +695,7 @@ def live_map():
         abort(404)
     return render_template(
         "map.html", title="Live station delays", active="map", **context,
-        map_stations=_network_stations(context["now"]), map_selected=selected,
+        map_stations=_network_stations(context["poll_states"]), map_selected=selected,
     )
 
 

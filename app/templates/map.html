@@ -20,7 +20,7 @@
     <button type="button" id="map-reset" class="map-reset" hidden>Reset view</button>
   </form>
   <label class="map-toggle" id="train-toggle" hidden><input type="checkbox" id="map-show-trains" checked> Show trains on map</label>
-  <p class="freshness" id="map-freshness">Showing each station’s latest successful update{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }} ago</time>{% endif %}</p>
+  <p class="freshness" id="map-freshness">Showing each station’s latest successful update{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}{% set not_current = map_stations|rejectattr('current')|list|length %}{% if not_current %} · {{ not_current }} station{{ '' if not_current == 1 else 's' }} not current{% endif %}</p>
   <p class="map-error" id="map-error" role="status" hidden>Couldn't refresh — showing earlier readings.</p>
   <p class="freshness" id="train-freshness" hidden></p>
   <p class="map-error" id="train-error" role="status" hidden></p>
@@ -36,7 +36,9 @@
     <li><i class="map-dot map-on-time" aria-hidden="true"></i> On time (≤1 min)</li>
     <li><i class="map-dot map-minor" aria-hidden="true"></i> Minor delay (&gt;1 to &lt;6 min)</li>
     <li><i class="map-dot map-significant" aria-hidden="true"></i> Significant delay (≥6 min)</li>
+    <li><i class="map-dot map-no-services" aria-hidden="true"></i> No services returned</li>
     <li><i class="map-dot map-no-data" aria-hidden="true"></i> No recent data</li>
+    <li><span class="map-marker map-marker-stale map-legend-stale" aria-hidden="true"></span> Not current (update failed or too old)</li>
     <li id="train-legend" hidden><span class="train-marker train-legend-icon" aria-hidden="true"><svg class="train-glyph" viewBox="0 0 16 16"><use href="#train-glyph"></use></svg></span> Train (last reported position)</li>
   </ul>
   <p class="note" id="train-note" hidden>Irish Rail reports each running train at the last station it passed, so train icons sit just below that station and don't move between stations.</p>
@@ -52,7 +54,8 @@
   <div id="map-station-list">
     {% for item in map_stations %}
     <details class="map-list-item" id="station-{{ item.code }}"{% if item.code == map_selected %} open{% endif %}>
-      <summary><span class="map-list-name"><i class="map-dot map-{{ item.status|replace(' ', '-') }}" aria-hidden="true"></i>{{ item.name }}</span><span>{{ item.status|capitalize }}</span><span>{% if item.average_reported_delay is not none %}Average delay: {{ '%.1f'|format(item.average_reported_delay) }} min{% else %}No recent data{% endif %}</span><span>{% if item.latest_observation_at %}<time datetime="{{ item.latest_observation_at }}" title="{{ item.latest_observation_at|observation_title }}" class="observation-time">{{ item.latest_observation_at|observation_age }}</time>{% else %}No observations yet{% endif %}</span><span class="map-view-cue"><span aria-hidden="true">⌄</span> View trains</span></summary>
+      <summary><span class="map-list-name"><i class="map-dot map-{{ item.status|replace(' ', '-') }}" aria-hidden="true"></i>{{ item.name }}</span><span>{{ item.status|capitalize }}</span><span>{% if item.average_reported_delay is not none %}Average delay: {{ '%.1f'|format(item.average_reported_delay) }} min{% elif item.status == 'no services' %}No services returned{% else %}No recent data{% endif %}</span><span>{% if item.current %}<time datetime="{{ item.latest_observation_at }}" title="{{ item.latest_observation_at|observation_title }}" class="observation-time">{{ item.latest_observation_at|observation_age }}</time>{% else %}<span class="map-not-current">{{ item.poll.text }}</span>{% endif %}</span><span class="map-view-cue"><span aria-hidden="true">⌄</span> View trains</span></summary>
+      {% if not item.current and item.latest_observation_at %}<p class="board-warning">{{ item.poll.text }}</p>{% endif %}
       {% if item.current_trains %}
       {% for direction, heading in [('arrival', 'Arrivals'), ('departure', 'Departures')] %}
       {% set grouped = item.current_trains|selectattr('direction', 'equalto', direction)|list %}
@@ -60,7 +63,7 @@
         {% for train in grouped %}<li class="map-service"><div class="map-service-main"><strong>{{ 'Arriving from ' ~ train.origin if direction == 'arrival' else 'Departing to ' ~ train.destination }}</strong><span>Expected {{ train.expected or '—' }}{% if train.expected_day_offset %} ({{ '+' if train.expected_day_offset > 0 else '' }}{{ train.expected_day_offset }} day){% endif %}</span><span class="map-service-delay{{ ' badge major' if train.delay >= 6 else '' }}">{{ train.delay|delay_text }}</span></div><small class="map-reading">{{ train.train_code }} · {{ train.origin }} → {{ train.destination }} · <time datetime="{{ train.train_date }}">{{ train.train_date }}</time> · Scheduled {{ train.scheduled }} · <time datetime="{{ train.reading_at }}" title="{{ train.reading_at|observation_title }}">{{ train.reading_at|observation_age }}</time></small></li>{% endfor %}
       </ul></section>{% endif %}
       {% endfor %}
-      {% else %}<p class="empty">No recent trains at this station.</p>{% endif %}
+      {% else %}<p class="empty">{{ 'No services returned in the latest update.' if item.status == 'no services' else 'No recent trains at this station.' }}</p>{% endif %}
       <p class="map-station-link"><a href="{{ url_for('dashboard.station_detail', code=item.code) }}">View {{ item.name }} station page →</a></p>
     </details>
     {% endfor %}
