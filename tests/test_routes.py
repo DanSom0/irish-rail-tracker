@@ -301,9 +301,11 @@ def test_live_network_api_uses_latest_successful_station_poll(
     assert response.status_code == 200
     data = {item["code"]: item for item in response.get_json()["stations"]}
     assert set(data) == set(codes)
+    # Current: CNLLY, TARA, HSTON, PERSE, GCDK (empty) and BRAY; not HOWTH (failed) or LDWNE.
+    assert response.get_json()["coverage"] == {"reporting": 6, "total": 8}
     assert set(data["CNLLY"]) == {
         "code", "name", "lat", "lon", "status", "average_reported_delay",
-        "latest_observation_at", "poll", "current_trains",
+        "latest_observation_at", "current", "poll", "current_trains",
     }
     assert data["CNLLY"]["poll"] == {
         "outcome": "ok", "attempted_at": clock.instant.isoformat(),
@@ -318,7 +320,11 @@ def test_live_network_api_uses_latest_successful_station_poll(
     assert [data[code]["status"] for code in ("TARA", "HSTON", "PERSE")] == [
         "minor delay", "minor delay", "significant delay",
     ]
-    assert data["GCDK"]["status"] == data["LDWNE"]["status"] == "no recent data"
+    # A successful empty poll is "no services"; never having data is "no recent data".
+    assert (data["GCDK"]["status"], data["LDWNE"]["status"]) == ("no services", "no recent data")
+    assert {code: data[code]["current"] for code in ("CNLLY", "GCDK", "HOWTH", "LDWNE")} == {
+        "CNLLY": True, "GCDK": True, "HOWTH": False, "LDWNE": False,
+    }
     assert data["GCDK"]["current_trains"] == []
     assert data["GCDK"]["latest_observation_at"] == clock.instant.isoformat()
     assert data["GCDK"]["poll"]["text"] == "No services returned"
@@ -335,6 +341,43 @@ def test_live_network_api_uses_latest_successful_station_poll(
     assert train["expected"] == "09:06"
     assert train["reading_at"] == clock.instant.isoformat()
     assert client.get("/").status_code == 200  # Daily statistics retain stale readings.
+
+
+def test_map_and_stations_table_label_failed_stale_and_empty_boards(
+    client, dashboard_data, clock, record_poll,
+):
+    seed, _ = dashboard_data
+    seed({"station": "CNLLY", "train_code": "KEPT", "delay_minutes": 4},
+         {"station": "TARA", "train_code": "AGED", "delay_minutes": 2,
+          "fetched_at": clock.instant - timedelta(minutes=15)},
+         {"station": "PERSE", "train_code": "NOW", "delay_minutes": 0})
+    record_poll("CNLLY", "error")
+    record_poll("GCDK")  # Successful, but no services returned.
+
+    page = client.get("/map").get_data(as_text=True)
+    rows = {code: page.split(f'id="station-{code}"', 1)[1].split("</details>", 1)[0]
+            for code in ("CNLLY", "TARA", "PERSE", "GCDK", "HSTON")}
+    assert '<span class="map-not-current">Update failed; showing data from 13:00</span>' in rows["CNLLY"]
+    assert '<p class="board-warning">Update failed; showing data from 13:00</p>' in rows["CNLLY"]
+    assert "Average delay: 4.0 min" in rows["CNLLY"]  # The last-good reading stays, labelled.
+    assert "OK, 1 train; not updated since 12:45" in rows["TARA"]
+    assert "map-not-current" not in rows["PERSE"] and "board-warning" not in rows["PERSE"]
+    assert "No services returned" in rows["GCDK"] and "map-no-services" in rows["GCDK"]
+    assert "map-not-current" not in rows["GCDK"]
+    assert "No recent data" in rows["HSTON"] and "Awaiting first poll" in rows["HSTON"]
+    assert "No services returned" in page.split('class="map-legend"', 1)[1]
+    freshness = page.split('id="map-freshness"', 1)[1].split("</p>", 1)[0]
+    assert "Updated just now</time> · 18 stations not current" in freshness
+    assert "● Limited coverage" in page
+
+    table = client.get("/stations").get_data(as_text=True)
+    cells = {code: table.split(f'href="/stations/{code}"', 1)[1].split("</th>", 1)[0]
+             for code in ("CNLLY", "TARA", "PERSE", "GCDK", "HSTON")}
+    assert '<small class="stale-note">Update failed; showing data from 13:00</small>' in cells["CNLLY"]
+    assert '<small class="stale-note">OK, 1 train; not updated since 12:45</small>' in cells["TARA"]
+    assert "<small>1 current service</small>" in cells["PERSE"]
+    assert "<small>No services returned</small>" in cells["GCDK"]
+    assert '<small class="stale-note">Awaiting first poll</small>' in cells["HSTON"]
 
 
 def test_live_map_renders_complete_list_without_javascript(client, dashboard_data, app, monkeypatch):

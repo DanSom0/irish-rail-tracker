@@ -12,6 +12,7 @@
   const resetButton = document.getElementById('map-reset');
   const list = document.getElementById('map-station-list');
   const freshness = document.getElementById('map-freshness');
+  const healthBadge = document.querySelector('.data-health');
   const error = document.getElementById('map-error');
   const trainToggle = document.getElementById('map-show-trains');
   const trainFreshness = document.getElementById('train-freshness');
@@ -94,17 +95,25 @@
     return `${amount} min ${delay < 0 ? 'early' : 'late'}`;
   }
   function statusClass(status) { return 'map-' + status.replaceAll(' ', '-'); }
+  function averageText(station) {
+    if (station.average_reported_delay !== null) return `Average delay: ${station.average_reported_delay.toFixed(1)} min`;
+    return station.status === 'no services' ? 'No services returned' : 'No recent data';
+  }
+  // A board kept from a failed or too-old poll is labelled with the poll's own wording.
+  function pollWarning(parent, station, className) {
+    if (!station.current) append(parent, className === 'board-warning' ? 'p' : 'span', className, station.poll.text);
+  }
   function summary(parent, station) {
     append(parent, 'span', 'map-status', station.status);
-    append(parent, 'p', '', station.average_reported_delay === null ? 'No recent data' :
-      `Average delay: ${station.average_reported_delay.toFixed(1)} min`);
+    if (station.latest_observation_at) pollWarning(parent, station, 'board-warning');
+    append(parent, 'p', '', averageText(station));
     append(parent, 'p', 'map-trains-count', `${station.current_trains.length} train${station.current_trains.length === 1 ? '' : 's'}`);
     const updated = append(parent, 'p', 'freshness');
     time(updated, station.latest_observation_at);
   }
   function stationTrains(parent, station) {
     if (!station.current_trains.length) {
-      append(parent, 'p', 'empty', 'No recent trains at this station.');
+      append(parent, 'p', 'empty', station.status === 'no services' ? 'No services returned in the latest update.' : 'No recent trains at this station.');
     } else {
       for (const [direction, heading] of [['arrival', 'Arrivals'], ['departure', 'Departures']]) {
         const group = station.current_trains.filter(train => train.direction === direction);
@@ -282,6 +291,8 @@
     freshness.replaceChildren();
     freshness.append('Showing each station’s latest successful update');
     if (stationsUpdatedAt) { freshness.append(' · '); time(freshness, stationsUpdatedAt); }
+    const notCurrent = stations.filter(item => !item.current).length;
+    if (notCurrent) freshness.append(` · ${notCurrent} station${notCurrent === 1 ? '' : 's'} not current`);
     error.hidden = !failed;
     if (failed) {
       error.textContent = stationsUpdatedAt
@@ -289,20 +300,28 @@
         : "Couldn't refresh station delays.";
     }
   }
+  // The header badge is server-rendered; keep it in step with each refresh.
+  function renderCoverage(coverage) {
+    if (!healthBadge || !coverage) return;
+    const limited = coverage.reporting < coverage.total;
+    healthBadge.classList.toggle('limited', limited);
+    healthBadge.textContent = `● ${limited ? 'Limited coverage' : 'Data up to date'}`;
+  }
   function render(data) {
     const openDetails = new Set([...list.querySelectorAll('details[open]')].map(item => item.id));
     stations = data.stations;
+    renderCoverage(data.coverage);
     for (const marker of markers.values()) marker.remove();
     markers.clear();
     list.replaceChildren();
     for (const station of stations) {
       if (station.lat !== null && station.lon !== null) {
         const empty = station.average_reported_delay === null;
-        const icon = node('div', 'map-marker' + (empty ? ' map-marker-empty' : ''));
+        const icon = node('div', 'map-marker' + (empty ? ' map-marker-empty' : '') + (station.current || !station.latest_observation_at ? '' : ' map-marker-stale'));
         append(icon, 'i', 'map-dot ' + statusClass(station.status));
         if (!empty) append(icon, 'span', 'map-marker-delay', `${station.average_reported_delay.toFixed(1)} min`);
         const marker = L.marker([station.lat, station.lon], { icon: L.divIcon({ html: icon, className: '', iconSize: empty ? [24, 24] : [82, 28] }), keyboard: false, zIndexOffset: empty ? 0 : 1000 });
-        marker.bindTooltip(station.name, { permanent: true, direction: 'top', offset: [0, -10], className: 'map-station-label' });
+        marker.bindTooltip(station.current || !station.latest_observation_at ? station.name : `${station.name} · not current`, { permanent: true, direction: 'top', offset: [0, -10], className: 'map-station-label' });
         marker.addTo(map).on('click', () => { const element = marker.getElement(); element.tabIndex = -1; show(station, element); });
         markers.set(station.code, marker);
       }
@@ -314,11 +333,13 @@
       append(name, 'i', 'map-dot ' + statusClass(station.status));
       append(name, 'span', '', station.name);
       append(label, 'span', '', station.status);
-      append(label, 'span', '', station.average_reported_delay === null ? 'No recent data' : `Average delay: ${station.average_reported_delay.toFixed(1)} min`);
-      time(append(label, 'span'), station.latest_observation_at);
+      append(label, 'span', '', averageText(station));
+      const updated = append(label, 'span');
+      if (station.current) time(updated, station.latest_observation_at); else pollWarning(updated, station, 'map-not-current');
       const cue = append(label, 'span', 'map-view-cue');
       append(cue, 'span', '', '⌄').setAttribute('aria-hidden', 'true');
       cue.append(' View trains');
+      if (station.latest_observation_at) pollWarning(detail, station, 'board-warning');
       stationTrains(detail, station);
     }
     stationsUpdatedAt = stations.map(item => item.latest_observation_at).filter(Boolean).sort().at(-1) || null;
