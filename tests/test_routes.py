@@ -858,9 +858,14 @@ def test_station_cookie_set_preselect_and_forget(client, dashboard_data):
 def test_methodology_and_problem_link(client, dashboard_data):
     page = client.get("/about/data").get_data(as_text=True)
     for text in ("every 5 minutes", "Late field", "not a confirmed arrival delay",
-                 "last 30 minutes", "fetch failures", "not affiliated with Iarnród Éireann",
+                 "succeeded in the last 15 minutes", "No services returned",
+                 "not a history of every poll", "marked as not current",
+                 "left out of current network figures",
+                 "not affiliated with Iarnród Éireann",
                  "public realtime API", "name-based inferences"):
         assert text in page
+    for obsolete in ("30 minutes", "We do not store"):
+        assert obsolete not in page
     for path in ("/", "/stations", "/stations/CNLLY", "/routes", "/status",
                  "/about/data", "/missing"):
         assert 'href="https://github.com/DanSom0/irish-rail-tracker/issues/new"' in (
