@@ -1,6 +1,7 @@
 """Tests for application HTTP routes and dashboard calculations."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1336,3 +1337,23 @@ def test_root_favicon_is_served_without_a_404_page(client):
     with client.get("/favicon.ico") as response:
         assert response.status_code == 200
         assert response.mimetype in ICO_TYPES
+
+
+def test_header_mark_matches_the_site_icon(client, dashboard_data):
+    """The header logo draws the same shapes as favicon.svg, so the page and tab icons match."""
+    def shapes(svg):
+        return [(tag, dict(re.findall(r'(\w+)="([^"]*)"', attrs)))
+                for tag, attrs in re.findall(r"<(rect|path|circle)\b([^>]*)>", svg)]
+
+    def geometry(shape):
+        tag, attrs = shape
+        keys = {"rect": ("width", "height", "rx"), "path": ("d", "stroke-width"),
+                "circle": ("cx", "cy", "r", "stroke-width")}[tag]
+        return tag, {key: attrs.get(key) for key in keys}
+
+    page = client.get("/").get_data(as_text=True)
+    header = re.search(r'<svg class="brand-mark".*?</svg>', page).group()
+    icon = (Path(__file__).parents[1] / "app/static/icons/favicon.svg").read_text()
+    assert len(shapes(icon)) == 3
+    assert [geometry(s) for s in shapes(header)] == [geometry(s) for s in shapes(icon)]
+    assert 'aria-hidden="true"' in header

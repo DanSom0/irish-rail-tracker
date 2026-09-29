@@ -8,6 +8,7 @@
   --line: #dbe5e6;
   --soft: #f7fafa;
   --accent: #006d70;
+  --brand-mark-fg: #fff;
   --on-time: #176447;
   --on-time-bg: #e7f4ec;
   --minor: #785000;
@@ -51,6 +52,8 @@ a:hover { text-decoration-thickness: 2px; }
 .brand-row { padding-block: var(--space-1); }
 .brand { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: 750; text-decoration: none; letter-spacing: -.02em; }
 .brand-mark { width: 28px; height: 28px; color: var(--accent); flex: none; }
+/* Matches static/icons/favicon.svg, including its dark-mode colours. */
+.brand-mark-line { stroke: var(--brand-mark-fg); }
 .wordmark-light { color: var(--muted); font-weight: 400; }
 .primary-nav { display: flex; align-items: baseline; gap: var(--space-3); }
 .primary-nav a { padding-block: var(--space-1); color: var(--muted); font-size: 14px; text-decoration: none; border-bottom: 3px solid transparent; }
@@ -222,7 +225,7 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
   tbody tr:hover { background: var(--soft); }
 }
 @media (prefers-color-scheme: dark) {
-  :root { color: #e6edf1; background: #111b21; --surface: #1b2931; --muted: #afc1ca; --line: #354750; --soft: #20323b; --accent: #7ddbd0; --on-time: #a4e3bf; --on-time-bg: #233e32; --minor: #f5d487; --minor-bg: #433921; --major: #ffb0b5; --major-bg: #462b32; --finder-bg: #183b3d; --finder-fg: #e6edf1; --finder-muted: #c2d7d7; --finder-outline: #8daead; --finder-action: #7ddbd0; --finder-action-fg: #102a2c; --finder-action-border: #7ddbd0; --table-head-bg: #2c3e48; --footer-bg: #0c161b; --heat-empty: #17232a; --heat-sparse-bg: #27353d; --heat-sparse-line: #708c98; --heat-border: #4c626c; --train: #bdb7ff; --train-fg: #1b1742; }
+  :root { color: #e6edf1; background: #111b21; --surface: #1b2931; --muted: #afc1ca; --line: #354750; --soft: #20323b; --accent: #7ddbd0; --brand-mark-fg: #102a2c; --on-time: #a4e3bf; --on-time-bg: #233e32; --minor: #f5d487; --minor-bg: #433921; --major: #ffb0b5; --major-bg: #462b32; --finder-bg: #183b3d; --finder-fg: #e6edf1; --finder-muted: #c2d7d7; --finder-outline: #8daead; --finder-action: #7ddbd0; --finder-action-fg: #102a2c; --finder-action-border: #7ddbd0; --table-head-bg: #2c3e48; --footer-bg: #0c161b; --heat-empty: #17232a; --heat-sparse-bg: #27353d; --heat-sparse-line: #708c98; --heat-border: #4c626c; --train: #bdb7ff; --train-fg: #1b1742; }
   button, .button { color: #102a2c; }
 }
 @media (max-width: 639px) {
