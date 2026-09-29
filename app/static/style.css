@@ -278,8 +278,9 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .map-enhancement { position: relative; margin-top: var(--space-2); }
 #network-map { width: 100%; height: 460px; background: var(--soft); border: 1px solid var(--line); border-radius: 4px; }
 @media (prefers-color-scheme: dark) { #network-map .leaflet-tile { filter: grayscale(.65) brightness(.72) contrast(.9); } }
-.leaflet-container .leaflet-control-attribution { background: var(--surface); color: inherit; font-size: 12px; padding: 2px 4px; }
-.leaflet-container .leaflet-control-attribution a { color: var(--accent); }
+/* The ID outranks leaflet.css, which loads after this file on the map page. */
+#network-map .leaflet-control-attribution { background: var(--surface); color: inherit; font-size: 12px; padding: 2px 4px; }
+#network-map .leaflet-control-attribution a { color: var(--accent); }
 .map-panel { position: absolute; z-index: 500; top: 0; right: 0; width: min(500px, 55%); max-height: 100%; overflow: auto; padding: var(--space-3); background: var(--surface); border: 1px solid var(--line); box-shadow: -8px 0 24px #0002; }
 .map-panel-close { float: right; min-height: 36px; padding: 4px 10px; background: var(--surface); color: var(--accent); }
 .map-panel h2 { margin-bottom: var(--space-2); }
@@ -318,6 +319,12 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 .map-list-item summary span { min-width: 0; }
 .map-list-item summary > span:not(:first-child) { color: var(--muted); font-size: 13px; }
 .map-list-item summary .map-view-cue { color: var(--accent); white-space: nowrap; font-weight: 650; }
+/* The five columns' minimum widths need about 730px, so stack rows below that, not only on phones. */
+@media (max-width: 799px) {
+  .map-list-item summary { grid-template-columns: 1fr auto; gap: 4px var(--space-1); }
+  .map-list-item summary > span:nth-child(2), .map-list-item summary > span:nth-child(3), .map-list-item summary > span:nth-child(4) { grid-column: 1 / -1; }
+  .map-list-item summary .map-view-cue { grid-column: 2; grid-row: 1; }
+}
 .map-list-item[open] .map-view-cue span { display: inline-block; transform: rotate(180deg); }
 .map-list-item .empty, .map-list-item .map-station-link { margin: var(--space-2); }
 .map-list-item .map-station-link { display: inline-block; font-size: 14px; }
@@ -359,9 +366,6 @@ summary { cursor: pointer; padding-block: 4px; min-height: 24px; }
 @media (max-width: 639px) {
   #network-map { height: 350px; touch-action: pan-y; }
   .map-panel { position: fixed; z-index: 1100; top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 65vh; border-radius: 12px 12px 0 0; box-shadow: 0 -8px 32px #0006; }
-  .map-list-item summary { grid-template-columns: 1fr auto; gap: 4px var(--space-1); }
-  .map-list-item summary > span:nth-child(2), .map-list-item summary > span:nth-child(3), .map-list-item summary > span:nth-child(4) { grid-column: 1 / -1; }
-  .map-list-item summary .map-view-cue { grid-column: 2; grid-row: 1; }
   .map-service-main { grid-template-columns: 1fr auto; }
   .map-service-main strong { grid-column: 1 / -1; }
 }

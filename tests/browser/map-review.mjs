@@ -38,13 +38,54 @@ async function run(c) {
   const browser = await c.browserType.launch();
   try {
     // Both flows wait for a 60-second refresh, so they run side by side.
-    await Promise.all([mainFlow(browser, c, results, shot), disappearingTrains(browser, c, results, shot)]);
+    await Promise.all([mainFlow(browser, c, results, shot), disappearingTrains(browser, c, results, shot),
+      layoutAndContrast(browser, c, results)]);
   } catch (e) {
     check(results, 'script completed', false, e.message.split('\n').slice(0, 12).join(' | '));
   } finally {
     await browser.close();
   }
   return { tag, results, shots };
+}
+
+// WCAG contrast ratio of two computed colours; a translucent background is flattened onto the page.
+function contrast(fg, bg, page) {
+  const parse = value => value.match(/[\d.]+/g).map(Number);
+  const flatten = (top, under) => top.length === 4 ? top.slice(0, 3).map((v, i) => v * top[3] + under[i] * (1 - top[3])) : top.slice(0, 3);
+  const luminance = rgb => rgb.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const back = flatten(parse(bg), parse(page));
+  const [a, b] = [luminance(flatten(parse(fg), back)), luminance(back)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+}
+
+// Station list at intermediate widths (#52) and map attribution contrast in this theme.
+async function layoutAndContrast(browser, c, results) {
+  for (const width of [640, 700, 768]) {
+    const page = await newPage(browser, { ...c, vw: width });
+    await page.goto(`${BASE}/map`);
+    await page.locator('#network-map .map-marker').first().waitFor();
+    const { scroll, spill } = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      spill: Math.max(...[...document.querySelectorAll('.map-list-item summary')].map(row => {
+        const box = row.getBoundingClientRect();
+        return Math.max(...[...row.children].map(child => child.getBoundingClientRect().right - box.right));
+      })),
+    }));
+    check(results, `station list fits at ${width}px`, scroll <= width && spill <= 0, `page ${scroll}px, cue ${Math.round(spill)}px past its row`);
+    if (width === 768) {
+      const colours = await page.evaluate(() => {
+        const box = document.querySelector('#network-map .leaflet-control-attribution');
+        return { text: getComputedStyle(box).color, link: getComputedStyle(box.querySelector('a')).color,
+          bg: getComputedStyle(box).backgroundColor, page: getComputedStyle(document.documentElement).backgroundColor };
+      });
+      for (const key of ['text', 'link']) {
+        const ratio = contrast(colours[key], colours.bg, colours.page);
+        check(results, `map attribution ${key} contrast ≥ 4.5`, ratio >= 4.5, `${ratio.toFixed(2)}: ${colours[key]} on ${colours.bg}`);
+      }
+    }
+    await page.context().close();
+  }
 }
 
 async function mainFlow(browser, c, results, shot) {
