@@ -193,14 +193,15 @@ const BEFORE = [
 ];
 async function disappearingTrains(browser, c, results, shot) {
   const before = { status: 'ok', fetched_at: iso(3), trains: BEFORE };
-  const after = removed => ({ status: 'ok', fetched_at: iso(0), trains: [
+  // Stamped when the page fetches it, so the next refresh always reads as "just now".
+  const after = removed => () => ({ status: 'ok', fetched_at: iso(0), trains: [
     ...BEFORE.filter(item => !removed.includes(item.train_code)),
     train('X900', ...CONNOLLY, 'Arrived Dublin Connolly'), // A newcomer must not join a group that is already open.
   ] });
   const openPage = async () => {
     const page = await newPage(browser, c);
     page._body = before;
-    await page.route('**/api/trains', route => json(page._body)(route));
+    await page.route('**/api/trains', route => json(typeof page._body === 'function' ? page._body() : page._body)(route));
     await page.goto(`${BASE}/map`);
     await page.waitForSelector('.train-icon');
     await page.waitForTimeout(500);
