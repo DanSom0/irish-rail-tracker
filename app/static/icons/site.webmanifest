@@ -1,0 +1,11 @@
+{
+  "name": "Dublin Rail Tracker",
+  "short_name": "Rail Tracker",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ],
+  "theme_color": "#006d70",
+  "background_color": "#ffffff",
+  "display": "browser"
+}

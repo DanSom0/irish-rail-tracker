@@ -1306,3 +1306,33 @@ def test_failed_stations_are_excluded_from_current_network_figures_but_keep_thei
         board = client.get(f"/stations/TARA?view={view}").get_data(as_text=True)
         assert "Update failed; showing data from" in board
     assert [row.train_code for row in context["pagination"]["items"]] == ["FAILED1"]
+
+
+# The .ico type comes from the host's MIME tables, which name it either way.
+ICO_TYPES = {"image/vnd.microsoft.icon", "image/x-icon"}
+
+
+def test_pages_link_the_site_icons_and_manifest(client, dashboard_data):
+    page = client.get("/").get_data(as_text=True)
+    for link in ('rel="icon" href="/static/icons/favicon.ico" sizes="32x32"',
+                 'rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml"',
+                 'rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png"',
+                 'rel="manifest" href="/static/icons/site.webmanifest"'):
+        assert link in page
+    for path, mimetype in (("/static/icons/favicon.ico", ICO_TYPES),
+                           ("/static/icons/favicon.svg", {"image/svg+xml"}),
+                           ("/static/icons/apple-touch-icon.png", {"image/png"}),
+                           ("/static/icons/site.webmanifest", {"application/manifest+json"})):
+        with client.get(path) as response:
+            assert response.status_code == 200 and response.mimetype in mimetype
+    manifest = json.loads(client.get("/static/icons/site.webmanifest").get_data())
+    assert manifest["name"] == "Dublin Rail Tracker" and manifest["theme_color"] == "#006d70"
+    for icon in manifest["icons"]:
+        with client.get(f"/static/icons/{icon['src']}") as response:
+            assert response.status_code == 200
+
+
+def test_root_favicon_is_served_without_a_404_page(client):
+    with client.get("/favicon.ico") as response:
+        assert response.status_code == 200
+        assert response.mimetype in ICO_TYPES
