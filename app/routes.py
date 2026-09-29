@@ -693,6 +693,12 @@ def status():
                            disk=check_disk_usage())
 
 
+@dashboard.route("/favicon.ico")
+def favicon():
+    """Browsers still ask for /favicon.ico; answer it rather than render a database-backed 404."""
+    return current_app.send_static_file("icons/favicon.ico")
+
+
 @dashboard.app_errorhandler(404)
 def not_found(error):
     return render_template(
