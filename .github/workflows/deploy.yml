@@ -24,7 +24,7 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     timeout-minutes: 20
     env:
@@ -32,7 +32,23 @@ jobs:
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       EC2_HOST: ${{ secrets.EC2_HOST }}
       EC2_USER: ${{ secrets.EC2_USER }}
+      SITE_URL: https://dublinrailtracker.duckdns.org
     steps:
+      - name: Check public HTTPS port
+        # Runs before anything is built or changed, so a failure leaves the running release
+        # alone. A security group without port 443 drops the connection attempt, so it times
+        # out (docs/postmortems/2026-09-https-port-closed.md). A refused connection passes: the
+        # port is open, but a release from before HTTPS has nothing listening until Caddy starts.
+        run: |
+          set -euo pipefail
+          host=${SITE_URL#https://}
+          status=0
+          timeout 10 bash -c "exec 3<> /dev/tcp/$host/443" || status=$?
+          if [[ $status == 124 ]]; then
+            echo "::error::Port 443 on $host did not answer from the runner within 10 seconds; check the security group. The running release is unchanged."
+            exit 1
+          fi
+          echo "[preflight] Port 443 on $host is reachable"
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.DEPLOY_SHA }}
@@ -57,12 +73,15 @@ jobs:
           printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
           printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
-      - name: Copy production files
+      - name: Copy release bundle
         run: |
           set -euo pipefail
+          incoming="/opt/irish-rail-tracker/releases/.incoming-$DEPLOY_SHA"
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$EC2_USER@$EC2_HOST" "rm -rf '$incoming' && mkdir -p '$incoming'"
           scp -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -r docker-compose.prod.yml scripts "$EC2_USER@$EC2_HOST:/opt/irish-rail-tracker/"
-      - name: Pull and start services
+            -r docker-compose.prod.yml Caddyfile scripts "$EC2_USER@$EC2_HOST:$incoming/"
+      - name: Pull and start release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -70,21 +89,42 @@ jobs:
           printf '%s' "$GH_TOKEN" | ssh -i ~/.ssh/deploy_key \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" \
             "docker login ghcr.io --username '$GITHUB_ACTOR' --password-stdin"
+          # The remote log is kept: the deploy only counts once activation reports this SHA.
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$EC2_USER@$EC2_HOST" "bash -s -- '$DEPLOY_SHA'" <<'REMOTE'
+            "$EC2_USER@$EC2_HOST" "bash -s -- '$DEPLOY_SHA'" <<'REMOTE' 2>&1 | tee "$RUNNER_TEMP/release.log"
           set -euo pipefail
-          cd /opt/irish-rail-tracker
-          trap 'docker logout ghcr.io > /dev/null' EXIT
-          export IMAGE_TAG="$1"
-          echo "[deploy] Starting $IMAGE_TAG"
-          docker compose --env-file .env -f docker-compose.prod.yml pull
-          docker compose --env-file .env -f docker-compose.prod.yml up -d
-          ./scripts/pin-image-tag.sh "$IMAGE_TAG"
-          ./scripts/install-cron.sh
-          docker image prune -f
+          # The whole script is one function, which bash reads in full before running it. A
+          # command that reads stdin (as `docker compose run` does) then cannot consume the
+          # rest of the script, which once ended deploys early with success after migrating.
+          deploy() {
+            cd "${APP_DIR:-/opt/irish-rail-tracker}"
+            trap 'docker logout ghcr.io > /dev/null' EXIT
+            local sha="$1"
+            # A bundle is complete once moved into place; one commit always has the same files.
+            if [[ -d "releases/$sha" ]]; then
+              rm -rf "releases/.incoming-$sha"
+            else
+              mv "releases/.incoming-$sha" "releases/$sha"
+            fi
+            echo "[deploy] Starting $sha"
+            # Migrates the schema with the new image before any container is replaced. A failed
+            # migration stops the deploy here and the running release stays active.
+            "releases/$sha/scripts/migrate.sh" "$sha"
+            # Switches current to the new release only after its /health check passes.
+            "releases/$sha/scripts/activate-release.sh" --pull "$sha"
+            ./scripts/install-cron.sh
+            ./scripts/prune-images.sh
+            docker image prune -f
+          }
+          deploy "$@"
           REMOTE
+          if ! grep -Fxq "[release] Healthy; current is $DEPLOY_SHA" "$RUNNER_TEMP/release.log"; then
+            echo "::error::The server did not report $DEPLOY_SHA as the healthy current release"
+            exit 1
+          fi
       - name: Check public health endpoint
-        run: ./scripts/healthcheck.sh "http://$EC2_HOST/health"
+        # HTTP 200 alone would also pass while an older release keeps running.
+        run: ./scripts/healthcheck.sh --release "$DEPLOY_SHA" "$SITE_URL/health"
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/deploy_key

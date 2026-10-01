@@ -11,7 +11,7 @@ permissions:
 jobs:
   lint:
     name: Ruff
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -25,10 +25,14 @@ jobs:
         run: |
           docker compose --env-file .env.production.example -f docker-compose.prod.yml config --quiet
           shellcheck scripts/*.sh
+      - name: Check Caddy configuration
+        run: |
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.4-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
   test:
     name: Pytest
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -57,7 +61,7 @@ jobs:
 
   terraform:
     name: Terraform
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v3
@@ -75,7 +79,9 @@ jobs:
 
   docker:
     name: Docker build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - run: docker build --tag irish-rail-tracker:ci .
+      - name: Check the image ships its migrations
+        run: docker run --rm irish-rail-tracker:ci alembic heads

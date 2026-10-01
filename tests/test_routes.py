@@ -1,6 +1,7 @@
 """Tests for application HTTP routes and dashboard calculations."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,8 +13,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import routes
 from app.extensions import db
-from app.models import Observation
-from app.stations import STATION_COORDINATES
+from app.models import Observation, StationPoll
+from app.stations import STATION_COORDINATES, canonical_station
 
 
 @pytest.fixture
@@ -39,7 +40,12 @@ def dashboard_data(app, clock):
 
     template_rendered.connect(capture, app)
 
-    def seed(*rows):
+    def seed(*rows, polls=True):
+        """Store observations; by default, also the successful polls that saved them.
+
+        Each station's latest seeded time becomes its latest successful poll, as if the
+        worker had saved those rows together.
+        """
         with app.app_context():
             for index, row in enumerate(rows):
                 db.session.add(Observation(**{
@@ -53,16 +59,54 @@ def dashboard_data(app, clock):
                     "fetched_at": clock.instant,
                     **row,
                 }))
+            db.session.flush()
+            if polls:
+                latest = {}
+                for station, fetched_at in db.session.execute(
+                    db.select(Observation.station, Observation.fetched_at)
+                ):
+                    code = canonical_station(station)
+                    latest.setdefault(code, []).append(fetched_at)
+                for code, times in latest.items():
+                    newest = max(times)
+                    db.session.merge(StationPoll(
+                        station_code=code, attempted_at=newest, succeeded_at=newest,
+                        outcome="ok", train_count=times.count(newest), error_reason=None,
+                    ))
             db.session.commit()
 
     yield seed, rendered
     template_rendered.disconnect(capture, app)
 
 
+@pytest.fixture
+def record_poll(app, clock):
+    """Record a station's latest poll after seeding: an empty board by default, or a failure."""
+
+    def record(station, outcome="empty", age=timedelta(0)):
+        at = clock.instant - age
+        with app.app_context():
+            poll = db.session.get(StationPoll, station) or StationPoll(station_code=station)
+            poll.attempted_at, poll.outcome = at, outcome
+            if outcome == "error":
+                poll.train_count, poll.error_reason = None, "request timed out"
+            else:
+                poll.succeeded_at, poll.train_count, poll.error_reason = at, 0, None
+            db.session.add(poll)
+            db.session.commit()
+
+    return record
+
+
 def test_health_reports_database_connectivity(client):
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.get_json() == {"database": "connected", "status": "ok"}
+    assert response.get_json() == {"database": "connected", "status": "ok", "release": None}
+
+
+def test_health_reports_the_running_release(app, client, monkeypatch):
+    monkeypatch.setitem(app.config, "RELEASE_SHA", "b" * 40)
+    assert client.get("/health").get_json()["release"] == "b" * 40
 
 
 def test_health_reports_database_disconnection(client, monkeypatch):
@@ -72,7 +116,7 @@ def test_health_reports_database_disconnection(client, monkeypatch):
     monkeypatch.setattr(db.session, "execute", raise_database_error)
     response = client.get("/health")
     assert response.status_code == 503
-    assert response.get_json() == {"database": "disconnected", "status": "unhealthy"}
+    assert response.get_json() == {"database": "disconnected", "status": "unhealthy", "release": None}
 
 
 @pytest.mark.parametrize("delay,label", [(-2, "2 min early"), (0, "On time"), (1, "1 min late"),
@@ -156,19 +200,20 @@ def test_summary_uses_todays_readings_and_counts_unique_trains(client, dashboard
     assert float(context["pagination"]["items"][0].average_delay) == 4
 
 
-def test_current_window_and_freshness(client, dashboard_data, clock):
+def test_current_window_and_freshness(client, dashboard_data, clock, record_poll):
     seed, context = dashboard_data
     seed(
         {"station": "TARA", "delay_minutes": 99,
          "fetched_at": clock.instant - timedelta(minutes=31)},
         {"delay_minutes": 2, "fetched_at": clock.instant - timedelta(minutes=7)},
     )
+    record_poll("TARA", age=timedelta(minutes=20))  # The train has left TARA's board.
     page = client.get("/").get_data(as_text=True)
     assert [row.station for row in context["current_delays"]] == ["CNLLY"]
     assert context["highest_delay"].station == "CNLLY"
     assert "Updated 7 minutes ago" in page
     client.get("/?station=TARA")
-    assert context["age_minutes"] == 31
+    assert context["age_minutes"] == 20
     assert context["highest_delay"] is None
 
 
@@ -202,26 +247,34 @@ def test_current_views_only_show_latest_station_cycle_but_daily_stats_keep_all_t
         "average_delay"] == 2
 
 
-def test_latest_station_board_expires_after_ten_minutes(client, dashboard_data, clock):
+def test_latest_successful_board_stays_visible_and_is_stale_after_fifteen_minutes(
+    client, dashboard_data, clock,
+):
     seed, context = dashboard_data
     seed(
         {"train_code": "STALE", "delay_minutes": 9,
-         "fetched_at": clock.instant - timedelta(minutes=10, seconds=1)},
-        {"train_code": "CURRENT", "station": "TARA", "delay_minutes": 8,
-         "fetched_at": clock.instant - timedelta(minutes=10)},
+         "fetched_at": clock.instant - timedelta(minutes=15)},
+        {"train_code": "FRESH", "station": "TARA", "delay_minutes": 8,
+         "fetched_at": clock.instant - timedelta(minutes=14, seconds=59)},
     )
     home = client.get("/").get_data(as_text=True)
-    assert [row.train_code for row in context["current_delays"]] == ["CURRENT"]
-    assert "STALE" not in home
-    assert context["coverage"]["reporting"] == 2  # Status retains its 30-minute window.
-    assert context["summary"].trains == 2
-    assert context["reporting_shortcuts"] == ["TARA"]
-    client.get("/stations/CNLLY?view=delays")
-    assert context["pagination"]["total"] == 0
+    # Exactly the age limit is stale, so that board leaves the "right now" figures.
+    assert [row.train_code for row in context["current_delays"]] == ["FRESH"]
+    network = context["network"]
+    assert (network["trains"], network["average_delay"], network["major"]) == (1, 8, 1)
+    assert (network["readings"], network["reporting"], network["excluded"]) == (1, 1, 1)
+    assert context["highest_delay"].station == "TARA"
+    assert context["coverage"]["reporting"] == 1
+    assert "1 station not updating; excluded" in home and "STALE" not in home
+    statuses = {row["station"]: row for row in context["station_status"]}
+    assert (statuses["CNLLY"]["stale"], statuses["TARA"]["stale"]) == (True, False)
+    page = client.get("/stations/CNLLY?view=delays").get_data(as_text=True)
+    assert context["pagination"]["total"] == 1
+    assert "OK, 1 train; not updated since 12:45" in page
 
 
-def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
-    app, client, dashboard_data, clock, monkeypatch,
+def test_live_network_api_uses_latest_successful_station_poll(
+    app, client, dashboard_data, clock, monkeypatch, record_poll,
 ):
     seed, _ = dashboard_data
     codes = ("CNLLY", "TARA", "HSTON", "PERSE", "GCDK", "BRAY", "HOWTH", "LDWNE")
@@ -234,21 +287,30 @@ def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
         {"station": "HSTON", "train_code": "FIVE", "delay_minutes": 5},
         {"station": "HSTON", "train_code": "SIX", "delay_minutes": 6},
         {"station": "PERSE", "train_code": "EXACT", "delay_minutes": 6},
-        {"station": "GCDK", "train_code": "STALE", "delay_minutes": 9,
+        {"station": "GCDK", "train_code": "DEPARTED", "delay_minutes": 9,
          "fetched_at": clock.instant - timedelta(minutes=10, seconds=1)},
         {"station": "BRAY", "train_code": "LEFT", "delay_minutes": 9,
          "fetched_at": clock.instant - timedelta(minutes=7)},
         {"station": "BRAY", "train_code": "PRESENT", "delay_minutes": 0},
-        {"station": "HOWTH", "train_code": "BOUNDARY", "delay_minutes": 1,
-         "fetched_at": clock.instant - timedelta(minutes=10)},
+        {"station": "HOWTH", "train_code": "OLDER", "delay_minutes": 1,
+         "fetched_at": clock.instant - timedelta(minutes=20)},
     )
+    record_poll("GCDK")  # Its latest poll returned no services.
+    record_poll("HOWTH", "error")  # Its latest poll failed.
     response = client.get("/api/network")
     assert response.status_code == 200
     data = {item["code"]: item for item in response.get_json()["stations"]}
     assert set(data) == set(codes)
+    # Current: CNLLY, TARA, HSTON, PERSE, GCDK (empty) and BRAY; not HOWTH (failed) or LDWNE.
+    assert response.get_json()["coverage"] == {"reporting": 6, "total": 8}
     assert set(data["CNLLY"]) == {
         "code", "name", "lat", "lon", "status", "average_reported_delay",
-        "latest_observation_at", "current_trains",
+        "latest_observation_at", "current", "poll", "current_trains",
+    }
+    assert data["CNLLY"]["poll"] == {
+        "outcome": "ok", "attempted_at": clock.instant.isoformat(),
+        "succeeded_at": clock.instant.isoformat(), "train_count": 2, "error_reason": None,
+        "stale": False, "text": "OK, 2 trains",
     }
     assert data["CNLLY"]["average_reported_delay"] == 1  # Early reading counts as zero.
     assert data["CNLLY"]["status"] == "on time"
@@ -258,18 +320,64 @@ def test_live_network_api_uses_latest_station_poll_within_ten_minutes(
     assert [data[code]["status"] for code in ("TARA", "HSTON", "PERSE")] == [
         "minor delay", "minor delay", "significant delay",
     ]
-    assert data["GCDK"]["status"] == data["LDWNE"]["status"] == "no recent data"
+    # A successful empty poll is "no services"; never having data is "no recent data".
+    assert (data["GCDK"]["status"], data["LDWNE"]["status"]) == ("no services", "no recent data")
+    assert {code: data[code]["current"] for code in ("CNLLY", "GCDK", "HOWTH", "LDWNE")} == {
+        "CNLLY": True, "GCDK": True, "HOWTH": False, "LDWNE": False,
+    }
     assert data["GCDK"]["current_trains"] == []
-    assert data["GCDK"]["latest_observation_at"] is not None
+    assert data["GCDK"]["latest_observation_at"] == clock.instant.isoformat()
+    assert data["GCDK"]["poll"]["text"] == "No services returned"
     assert data["LDWNE"]["latest_observation_at"] is None
+    assert data["LDWNE"]["poll"]["text"] == "Awaiting first poll"
     assert [train["train_code"] for train in data["BRAY"]["current_trains"]] == ["PRESENT"]
-    assert [train["train_code"] for train in data["HOWTH"]["current_trains"]] == ["BOUNDARY"]
+    assert [train["train_code"] for train in data["HOWTH"]["current_trains"]] == ["OLDER"]
+    assert data["HOWTH"]["poll"]["stale"] is True
+    assert data["HOWTH"]["poll"]["text"] == "Update failed; showing data from 12:40"
+    assert data["HOWTH"]["latest_observation_at"] == (clock.instant - timedelta(minutes=20)).isoformat()
     train = data["CNLLY"]["current_trains"][0]
     assert set(train) == {"train_code", "train_date", "origin", "destination", "direction",
-                          "scheduled", "expected", "expected_day_offset", "delay", "reading_at"}
+                          "scheduled", "expected", "expected_day_offset", "clocks_went_back", "delay", "reading_at"}
     assert train["expected"] == "09:06"
     assert train["reading_at"] == clock.instant.isoformat()
     assert client.get("/").status_code == 200  # Daily statistics retain stale readings.
+
+
+def test_map_and_stations_table_label_failed_stale_and_empty_boards(
+    client, dashboard_data, clock, record_poll,
+):
+    seed, _ = dashboard_data
+    seed({"station": "CNLLY", "train_code": "KEPT", "delay_minutes": 4},
+         {"station": "TARA", "train_code": "AGED", "delay_minutes": 2,
+          "fetched_at": clock.instant - timedelta(minutes=15)},
+         {"station": "PERSE", "train_code": "NOW", "delay_minutes": 0})
+    record_poll("CNLLY", "error")
+    record_poll("GCDK")  # Successful, but no services returned.
+
+    page = client.get("/map").get_data(as_text=True)
+    rows = {code: page.split(f'id="station-{code}"', 1)[1].split("</details>", 1)[0]
+            for code in ("CNLLY", "TARA", "PERSE", "GCDK", "HSTON")}
+    assert '<span class="map-not-current">Update failed; showing data from 13:00</span>' in rows["CNLLY"]
+    assert '<p class="board-warning">Update failed; showing data from 13:00</p>' in rows["CNLLY"]
+    assert "Average delay: 4.0 min" in rows["CNLLY"]  # The last-good reading stays, labelled.
+    assert "OK, 1 train; not updated since 12:45" in rows["TARA"]
+    assert "map-not-current" not in rows["PERSE"] and "board-warning" not in rows["PERSE"]
+    assert "No services returned" in rows["GCDK"] and "map-no-services" in rows["GCDK"]
+    assert "map-not-current" not in rows["GCDK"]
+    assert "No recent data" in rows["HSTON"] and "Awaiting first poll" in rows["HSTON"]
+    assert "No services returned" in page.split('class="map-legend"', 1)[1]
+    freshness = page.split('id="map-freshness"', 1)[1].split("</p>", 1)[0]
+    assert "Updated just now</time> · 18 stations not current" in freshness
+    assert "● Limited coverage" in page
+
+    table = client.get("/stations").get_data(as_text=True)
+    cells = {code: table.split(f'href="/stations/{code}"', 1)[1].split("</th>", 1)[0]
+             for code in ("CNLLY", "TARA", "PERSE", "GCDK", "HSTON")}
+    assert '<small class="stale-note">Update failed; showing data from 13:00</small>' in cells["CNLLY"]
+    assert '<small class="stale-note">OK, 1 train; not updated since 12:45</small>' in cells["TARA"]
+    assert "<small>1 current service</small>" in cells["PERSE"]
+    assert "<small>No services returned</small>" in cells["GCDK"]
+    assert '<small class="stale-note">Awaiting first poll</small>' in cells["HSTON"]
 
 
 def test_live_map_renders_complete_list_without_javascript(client, dashboard_data, app, monkeypatch):
@@ -284,7 +392,7 @@ def test_live_map_renders_complete_list_without_javascript(client, dashboard_dat
     page = client.get("/map").get_data(as_text=True)
     assert "Live station delays" in page
     assert "Tracking 2 Dublin-area stations." in page
-    assert "Showing station updates from the last 10 minutes" in page
+    assert "Showing each station’s latest successful update" in page
     assert 'id="map-station-list"' in page and "ARRIVE" in page and "DEPART" in page
     assert "Average delay: 4.5 min" in page and "No recent data" in page
     assert "Arrivals" in page and "Arriving from Portlaoise" in page
@@ -358,31 +466,58 @@ def test_today_uses_dublin_service_date(client, dashboard_data, clock, instant, 
     assert context["summary"].average_delay == 0
 
 
-@pytest.mark.parametrize("instant,flagged", [
-    ("2026-09-22T04:59:59+00:00", False),
-    ("2026-09-22T05:00:00+00:00", True),
-    ("2026-09-22T22:30:00+00:00", True),
-    ("2026-09-22T22:30:01+00:00", False),
-    ("2026-09-22T23:30:00+00:00", False),
-    ("2026-12-22T05:59:59+00:00", False),
-    ("2026-12-22T06:00:00+00:00", True),
-])
-def test_status_flags_only_stale_stations_during_service_hours(
-    client, dashboard_data, clock, instant, flagged,
+@pytest.mark.parametrize("instant", ["2026-09-22T02:00:00+00:00", "2026-09-22T12:00:00+00:00"])
+def test_status_flags_failed_and_old_boards_as_stale_at_any_hour(
+    client, dashboard_data, clock, record_poll, instant,
 ):
     seed, context = dashboard_data
     clock.instant = datetime.fromisoformat(instant)
     seed(
-        {"station": "CNLLY", "fetched_at": clock.instant - timedelta(minutes=30, seconds=1)},
-        {"station": "TARA", "fetched_at": clock.instant - timedelta(minutes=30)},
+        {"station": "CNLLY", "fetched_at": clock.instant - timedelta(minutes=15)},
+        {"station": "TARA", "fetched_at": clock.instant - timedelta(minutes=14, seconds=59)},
+        {"station": "PERSE"},
     )
+    record_poll("PERSE", "error")
+    record_poll("GCDK")  # An empty board, normal overnight, is a successful poll.
     page = client.get("/status").get_data(as_text=True)
     statuses = {row["station"]: row for row in context["station_status"]}
-    assert statuses["CNLLY"]["stale"] is flagged
-    assert statuses["HSTON"]["stale"] is flagged  # Never observed.
-    assert statuses["TARA"]["stale"] is False  # Exactly 30 minutes is still fresh.
-    if not flagged:
-        assert "No recent readings" in page
+    assert {code: statuses[code]["stale"] for code in ("CNLLY", "TARA", "PERSE", "GCDK", "HSTON")} == {
+        "CNLLY": True, "TARA": False, "PERSE": True, "GCDK": False, "HSTON": False,
+    }
+    assert statuses["HSTON"]["poll"]["outcome"] == "awaiting_first_poll"
+    for text in ("OK, 1 train; not updated since", "No services returned",
+                 "Update failed; showing data from", "Awaiting first poll"):
+        assert text in page
+    assert context["coverage"]["reporting"] == 2
+
+
+@pytest.mark.parametrize("used,free,shown,badge", [
+    (54, 146, "27% used · 146 Bytes free of 200 Bytes", False),
+    (161, 39, "81% used · 39 Bytes free of 200 Bytes", True),
+])
+def test_status_shows_disk_usage_and_warning(
+    client, dashboard_data, monkeypatch, caplog, used, free, shown, badge,
+):
+    seed, _ = dashboard_data
+    seed({})
+    monkeypatch.setattr("app.disk.shutil.disk_usage",
+                        lambda path: SimpleNamespace(total=200, used=used, free=free))
+    page = client.get("/status").get_data(as_text=True)
+    assert shown in page
+    assert ('<span class="badge major">Above 80%</span>' in page) is badge
+    assert ("disk_usage_high" in caplog.text) is badge
+
+
+def test_status_renders_when_disk_usage_is_unavailable(client, dashboard_data, monkeypatch):
+    seed, _ = dashboard_data
+    seed({})
+
+    def fail(path):
+        raise OSError("gone")
+    monkeypatch.setattr("app.disk.shutil.disk_usage", fail)
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert "Disk usage is unavailable." in response.get_data(as_text=True)
 
 
 def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboard_data, monkeypatch):
@@ -401,7 +536,7 @@ def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboar
             assert client.get("/").status_code == 200
         finally:
             event.remove(engine, "before_cursor_execute", record)
-    assert len(queries) == 5
+    assert len(queries) == 6
     assert len(context["current_delays"]) == 5
     assert context["network"]["readings"] == 120
     assert all(row.delay_minutes == 9 for row in context["current_delays"])
@@ -425,7 +560,7 @@ def test_each_page_renders_with_title_navigation_and_refresh(
     response = client.get(path)
     page = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert f"<title>{title} · Irish Rail Delay Tracker</title>" in page
+    assert f"<title>{title} · Dublin Rail Tracker</title>" in page
     if active:
         assert f'aria-current="page">{active}</a>' in page
     assert '<meta http-equiv="refresh" content="60">' in page
@@ -438,7 +573,7 @@ def test_unknown_pages_are_styled_404s(client, dashboard_data, path):
     response = client.get(path)
     page = response.get_data(as_text=True)
     assert response.status_code == 404
-    assert "Page not found · Irish Rail Delay Tracker" in page
+    assert "Page not found · Dublin Rail Tracker" in page
     assert 'style.css' in page and 'Browse stations' in page
     assert 'href="/"' in page
 
@@ -458,19 +593,22 @@ def test_station_detail_is_scoped_and_directory_links_to_it(client, dashboard_da
     assert client.get("/stations?station=INVALID").status_code == 200
 
 
-def test_current_network_is_weighted_and_excludes_old_readings(client, dashboard_data, clock):
+def test_current_network_is_weighted_and_excludes_old_readings(
+    client, dashboard_data, clock, record_poll,
+):
     seed, context = dashboard_data
     seed({"delay_minutes": 0}, {"delay_minutes": 1},
          {"station": "TARA", "delay_minutes": 8},
          {"station": "HSTON", "delay_minutes": 99,
           "fetched_at": clock.instant - timedelta(minutes=31)})
+    record_poll("HSTON")  # The late train has left HSTON's board.
     page = client.get("/").get_data(as_text=True)
     network = context["network"]
     assert network["average_delay"] == 3
     assert network["on_time"] == pytest.approx(200 / 3)
     assert network["major"] == 1 and network["readings"] == 3
-    assert network["reporting"] == 2
-    assert "2/20 stations reporting" in page
+    assert network["reporting"] == 2  # Stations with current trains.
+    assert "3/20 stations reporting" in page  # HSTON's empty board is a successful poll.
     assert context["summary"].average_delay == 27  # Today is distinct from right now.
 
 
@@ -622,7 +760,9 @@ def test_home_station_picker_names_and_footer(client, dashboard_data):
     for code in ("PERSE", "TARA", "HSTON", "GCDK"):
         assert f'<a href="/stations/{code}">{routes.STATION_NAMES[code]}</a>' not in page
     assert "Check your station&#39;s" in page or "Check your station's" in page
-    assert 'Independent project, not affiliated with Iarnród Éireann' in page
+    assert 'Dublin Rail Tracker is an independent project, not affiliated with Iarnród Éireann' in page
+    assert '<span>Dublin Rail <span class="wordmark-light">Tracker</span></span>' in page
+    assert 'Irish Rail Delay Tracker' not in page
     assert 'Daniel English' in page
     assert page.index('Report a problem') > page.index('<footer')
     assert 'href="/about/data"' in page
@@ -648,27 +788,26 @@ def test_static_names_cover_configured_stations(app, client, dashboard_data, mon
         assert "Unlisted station" not in page
         for code in codes:
             assert STATION_NAMES[code] in page
-    assert "No monitored stations have a reading in the last 30 minutes" in (
+    assert "No monitored station has a successful poll in the last 15 minutes" in (
         client.get("/status").get_data(as_text=True)
     )
     assert client.get("/stations/GCDK").status_code == 200
 
 
 @pytest.mark.parametrize("all_reporting", [False, True])
-def test_coverage_counts_stations_with_readings_in_window(
-    app, client, dashboard_data, clock, monkeypatch, all_reporting,
+def test_coverage_counts_stations_with_a_recent_successful_poll(
+    app, client, dashboard_data, clock, monkeypatch, record_poll, all_reporting,
 ):
     seed, context = dashboard_data
     monkeypatch.setitem(app.config, "STATION_CODES", ("CNLLY", "TARA", "GCDK"))
     seed(
         {"station": "CNLLY"},
         {"station": "CNLLY"},  # Multiple trains still count as one reporting station.
-        {"station": "TARA", "fetched_at": clock.instant - timedelta(minutes=30)},
         {"station": "GCDK", "fetched_at": clock.instant - timedelta(
-            minutes=29 if all_reporting else 30, seconds=1)},
+            minutes=14 if all_reporting else 15)},
         {"station": "PERSE"},  # Historical/unconfigured stations do not inflate coverage.
-        {"station": "GCDK", "fetched_at": clock.instant + timedelta(minutes=1)},
     )
+    record_poll("TARA", age=timedelta(minutes=14, seconds=59))  # An empty board still reports.
     page = client.get("/").get_data(as_text=True)
     assert context["coverage"] == {"reporting": 3 if all_reporting else 2, "total": 3}
     if all_reporting:
@@ -677,7 +816,7 @@ def test_coverage_counts_stations_with_readings_in_window(
         assert "● Data up to date" in page
     else:
         assert "2/3 stations reporting" in page
-        assert "No recent readings" in client.get("/status").get_data(as_text=True)
+        assert "not updated since" in client.get("/status").get_data(as_text=True)
     client.get("/stations/CNLLY")
     assert context["coverage"]["total"] == 3
 
@@ -719,9 +858,14 @@ def test_station_cookie_set_preselect_and_forget(client, dashboard_data):
 def test_methodology_and_problem_link(client, dashboard_data):
     page = client.get("/about/data").get_data(as_text=True)
     for text in ("every 5 minutes", "Late field", "not a confirmed arrival delay",
-                 "last 30 minutes", "fetch failures", "not affiliated with Iarnród Éireann",
+                 "succeeded in the last 15 minutes", "No services returned",
+                 "not a history of every poll", "marked as not current",
+                 "left out of current network figures",
+                 "not affiliated with Iarnród Éireann",
                  "public realtime API", "name-based inferences"):
         assert text in page
+    for obsolete in ("30 minutes", "We do not store"):
+        assert obsolete not in page
     for path in ("/", "/stations", "/stations/CNLLY", "/routes", "/status",
                  "/about/data", "/missing"):
         assert 'href="https://github.com/DanSom0/irish-rail-tracker/issues/new"' in (
@@ -750,14 +894,15 @@ def test_figure_explanations_are_disclosed_while_headlines_and_warnings_remain_v
     client, dashboard_data, clock,
 ):
     seed, _ = dashboard_data
-    seed({"delay_minutes": 7, "fetched_at": clock.instant - timedelta(minutes=11)})
+    seed({"delay_minutes": 7, "fetched_at": clock.instant - timedelta(minutes=16)})
     home = client.get("/").get_data(as_text=True)
     before_details, explanation = home.split(
         '<details class="figures-details"><summary>About these figures</summary>', 1,
     )
-    assert "1/20 stations reporting" in before_details
-    assert "Updated 11 minutes ago" in before_details
-    assert "Limited coverage" in before_details and "Latest board stale" in before_details
+    assert "0/20 stations reporting" in before_details
+    assert "Updated 16 minutes ago" in before_details
+    assert "Limited coverage" in before_details
+    assert "1 station not updating; excluded" in before_details
     assert "Coverage means" in explanation and "Today: based on 1 train" in explanation
     assert "On time includes early trains" in explanation
     assert home.count('<details class="figures-details">') == 1
@@ -806,19 +951,20 @@ def test_aliases_share_one_picker_entry_and_coverage(app, client, dashboard_data
 def test_recent_reading_pluralisation(client, dashboard_data, count):
     seed, _ = dashboard_data
     seed(*({} for _ in range(count)))
-    for path, phrase in (("/stations", "current service"), ("/status", "recent reading")):
+    for path, phrase in (("/stations", "current service"), ("/status", "train")):
         page = client.get(path).get_data(as_text=True)
         assert f"{count} {phrase}{'s' if count != 1 else ''}" in page
         assert f"1 {phrase}s" not in page
 
 
 @pytest.mark.parametrize("path", ["/", "/routes", "/stations", "/stations/CNLLY"])
-def test_empty_sections_and_yesterday_link(client, dashboard_data, clock, path):
+def test_empty_sections_and_yesterday_link(client, dashboard_data, clock, record_poll, path):
     seed, _ = dashboard_data
     page = client.get(path).get_data(as_text=True)
     assert "No data yet" not in page and "<thead>" not in page and "0 routes" not in page
     assert "View yesterday" not in page
     seed({"train_date": "2026-09-21", "fetched_at": clock.instant - timedelta(days=1)})
+    record_poll("CNLLY")  # Today's board is empty.
     page = client.get(path).get_data(as_text=True)
     assert "View yesterday" in page
     page = client.get("/routes?day=yesterday&station=CNLLY").get_data(as_text=True)
@@ -856,8 +1002,11 @@ def test_official_place_names_and_defensive_picker_dedupe():
     ("KISHF", "KISHO"), ("KISHS", "KISHO"),
     ("PWESF", "CHORC"),
 ])
-def test_legacy_station_aliases_share_one_board(client, dashboard_data, alias, canonical):
+def test_legacy_station_aliases_share_one_board(
+    app, client, dashboard_data, monkeypatch, alias, canonical,
+):
     seed, context = dashboard_data
+    monkeypatch.setitem(app.config, "STATION_CODES", (canonical,))  # Only monitored boards are current.
     seed({"station": alias, "delay_minutes": 4})
     page = client.get(f"/stations/{canonical}?view=delays").get_data(as_text=True)
     assert context["pagination"]["total"] == 1
@@ -924,6 +1073,75 @@ def test_expected_time_crosses_dublin_spring_clock_change():
     row = SimpleNamespace(train_date="2026-03-29", scheduled_time="00:59",
                           delay_minutes=2)
     assert routes.expected_time(row) == ("02:01", 0)
+
+
+@pytest.mark.parametrize("train_date,scheduled,delay,expected,went_back", [
+    # Normal day: unchanged, never noted.
+    ("2026-09-22", "12:34", 7, ("12:41", 0), False),
+    ("2026-09-22", "23:58", 7, ("00:05", 1), False),
+    # 25 October: a repeated 01:xx is its first (IST) occurrence.
+    ("2026-10-25", "01:30", 45, ("01:15", 0), True),
+    ("2026-10-25", "01:50", 15, ("01:05", 0), True),
+    ("2026-10-25", "01:30", 0, ("01:30", 0), False),
+    ("2026-10-25", "01:30", -5, ("01:25", 0), False),
+    ("2026-10-25", "00:50", 20, ("01:10", 0), False),
+    ("2026-10-25", "00:59", 61, ("01:00", 0), False),
+    ("2026-10-25", "02:30", 10, ("02:40", 0), False),
+    # 29 March: a skipped 01:xx uses the pre-change offset.
+    ("2026-03-29", "01:30", 0, ("02:30", 0), False),
+    ("2026-03-29", "01:30", 10, ("02:40", 0), False),
+    ("2026-03-29", "broken", 0, (None, 0), False),
+])
+def test_expected_time_policy_across_dublin_clock_changes(
+    train_date, scheduled, delay, expected, went_back,
+):
+    row = SimpleNamespace(train_date=train_date, scheduled_time=scheduled, delay_minutes=delay)
+    assert routes.expected_time(row) == expected
+    assert routes.clocks_went_back(row) is went_back
+
+
+@pytest.mark.parametrize("instant,rows,expected,clocks", [
+    # 01:10 GMT, after clocks went back: the first 01:20 and 01:30 have passed.
+    ("2026-10-25T01:10:00+00:00", [
+        {"train_code": "LATE", "scheduled_time": "01:30", "delay_minutes": 45},
+        {"train_code": "PASSED", "scheduled_time": "01:30"},
+        {"train_code": "EARLIER", "scheduled_time": "01:20"},
+        {"train_code": "LATER", "scheduled_time": "02:00"},
+    ], ["LATE", "LATER"], ["01:15", "02:00"]),
+    # 02:05 IST, after clocks went forward: skipped 01:30 reads as 02:30.
+    ("2026-03-29T01:05:00+00:00", [
+        {"train_code": "GAP", "scheduled_time": "01:30"},
+        {"train_code": "CROSSED", "scheduled_time": "00:59", "delay_minutes": 2},
+        {"train_code": "SOON", "scheduled_time": "02:10"},
+        {"train_code": "GONE", "scheduled_time": "00:30"},
+    ], ["SOON", "GAP"], ["02:10", "02:30"]),
+])
+def test_next_services_filter_matches_displayed_time_across_clock_changes(
+    client, dashboard_data, clock, instant, rows, expected, clocks,
+):
+    seed, context = dashboard_data
+    clock.instant = datetime.fromisoformat(instant)
+    seed(*rows)
+    page = client.get("/stations/CNLLY").get_data(as_text=True)
+    items = context["pagination"]["items"]
+    assert [row.train_code for row in items] == expected
+    assert [routes.expected_time(row)[0] for row in items] == clocks
+    assert context["pagination"]["total"] == len(expected)
+    assert page.count("<small>clocks went back</small>") == (1 if "LATE" in expected else 0)
+
+
+def test_network_api_flags_clocks_went_back(client, dashboard_data, clock):
+    seed, _ = dashboard_data
+    clock.instant = datetime(2026, 10, 25, 1, 10, tzinfo=UTC)
+    seed(
+        {"train_code": "LATE", "scheduled_time": "01:30", "delay_minutes": 45},
+        {"train_code": "NORMAL", "scheduled_time": "02:00"},
+    )
+    stations = client.get("/api/network").get_json()["stations"]
+    trains = {train["train_code"]: train for station in stations
+              for train in station["current_trains"]}
+    assert (trains["LATE"]["expected"], trains["LATE"]["clocks_went_back"]) == ("01:15", True)
+    assert trains["NORMAL"]["clocks_went_back"] is False
 
 
 def test_service_boards_show_scheduled_expected_destination_and_status(client, dashboard_data):
@@ -1001,6 +1219,27 @@ def test_patterns_bucket_scheduled_dublin_day_across_october_dst_and_midnight(
     )
     assert "Data from 25–26 October 2026" in page
     assert "Sunday 23:00–24:00" in page and "Monday 05:00–06:00" in page
+
+
+def test_patterns_use_scheduled_wall_clock_hour_on_clock_change_days(
+    client, dashboard_data, clock,
+):
+    """Repeated or skipped 01:xx is outside the 05–23 grid; 05:xx stays at 05:00."""
+    seed, context = dashboard_data
+    clock.instant = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    seed(
+        {"train_code": "REPEAT", "train_date": "2026-10-25", "scheduled_time": "01:30",
+         "delay_minutes": 45},
+        {"train_code": "SKIPPED", "train_date": "2026-03-29", "scheduled_time": "01:30"},
+        {"train_code": "AUTUMN", "train_date": "2026-10-25", "scheduled_time": "05:59",
+         "delay_minutes": 3},
+        {"train_code": "SPRING", "train_date": "2026-03-29", "scheduled_time": "05:10",
+         "delay_minutes": 5},
+    )
+    client.get("/patterns")
+    assert set(context["cells"]) == {(7, 5)}
+    assert context["cells"][(7, 5)].readings == 2
+    assert context["cells"][(7, 5)].average_delay == 4
 
 
 def test_patterns_exclude_missing_invalid_and_out_of_service_hours(client, dashboard_data, clock):
@@ -1091,3 +1330,105 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
     client.get("/patterns?station=INVALID")
     assert context["station"] == ""  # Existing query-filter behaviour: reset to all monitored.
     assert context["cells"][(2, 9)].readings == 1
+
+
+def test_failed_stations_are_excluded_from_current_network_figures_but_keep_their_board(
+    client, dashboard_data, record_poll,
+):
+    seed, context = dashboard_data
+    seed({"train_code": "OK1", "delay_minutes": 2},
+         {"station": "TARA", "train_code": "FAILED1", "delay_minutes": 20},
+         {"station": "PERSE", "train_code": "FAILED2", "delay_minutes": 9})
+    record_poll("TARA", "error")
+    record_poll("PERSE", "error")
+
+    home = client.get("/").get_data(as_text=True)
+    network = context["network"]
+    assert (network["trains"], network["average_delay"], network["major"]) == (1, 2, 0)
+    assert (network["readings"], network["reporting"], network["excluded"]) == (1, 1, 2)
+    assert context["highest_delay"].station == "CNLLY"
+    assert [row.train_code for row in context["current_delays"]] == ["OK1"]
+    assert "2 stations not updating; excluded" in home and "FAILED1" not in home
+
+    client.get("/?station=TARA")
+    assert (context["network"]["trains"], context["network"]["excluded"]) == (0, 1)
+    assert context["current_delays"] == []
+    assert "1 station not updating; excluded" in client.get("/?station=TARA").get_data(as_text=True)
+
+    for view in ("next", "delays"):
+        board = client.get(f"/stations/TARA?view={view}").get_data(as_text=True)
+        assert "Update failed; showing data from" in board
+    assert [row.train_code for row in context["pagination"]["items"]] == ["FAILED1"]
+
+
+# The .ico type comes from the host's MIME tables, which name it either way.
+ICO_TYPES = {"image/vnd.microsoft.icon", "image/x-icon"}
+
+
+def test_pages_link_the_site_icons_and_manifest(client, dashboard_data):
+    page = client.get("/").get_data(as_text=True)
+    for link in ('rel="icon" href="/static/icons/favicon.ico" sizes="32x32"',
+                 'rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml"',
+                 'rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png"',
+                 'rel="manifest" href="/static/icons/site.webmanifest"'):
+        assert link in page
+    for path, mimetype in (("/static/icons/favicon.ico", ICO_TYPES),
+                           ("/static/icons/favicon.svg", {"image/svg+xml"}),
+                           ("/static/icons/apple-touch-icon.png", {"image/png"}),
+                           ("/static/icons/site.webmanifest", {"application/manifest+json"})):
+        with client.get(path) as response:
+            assert response.status_code == 200 and response.mimetype in mimetype
+    manifest = json.loads(client.get("/static/icons/site.webmanifest").get_data())
+    assert manifest["name"] == "Dublin Rail Tracker" and manifest["theme_color"] == "#006d70"
+    for icon in manifest["icons"]:
+        with client.get(f"/static/icons/{icon['src']}") as response:
+            assert response.status_code == 200
+
+
+def test_root_favicon_is_served_without_a_404_page(client):
+    with client.get("/favicon.ico") as response:
+        assert response.status_code == 200
+        assert response.mimetype in ICO_TYPES
+
+
+def test_header_mark_matches_the_site_icon(client, dashboard_data):
+    """The header logo draws the same shapes as favicon.svg, so the page and tab icons match."""
+    def shapes(svg):
+        return [(tag, dict(re.findall(r'(\w+)="([^"]*)"', attrs)))
+                for tag, attrs in re.findall(r"<(rect|path|circle)\b([^>]*)>", svg)]
+
+    def geometry(shape):
+        tag, attrs = shape
+        keys = {"rect": ("width", "height", "rx"), "path": ("d", "stroke-width"),
+                "circle": ("cx", "cy", "r", "stroke-width")}[tag]
+        return tag, {key: attrs.get(key) for key in keys}
+
+    page = client.get("/").get_data(as_text=True)
+    header = re.search(r'<svg class="brand-mark".*?</svg>', page).group()
+    icon = (Path(__file__).parents[1] / "app/static/icons/favicon.svg").read_text()
+    assert len(shapes(icon)) == 3
+    assert [geometry(s) for s in shapes(header)] == [geometry(s) for s in shapes(icon)]
+    assert 'aria-hidden="true"' in header
+
+
+def test_stopped_worker_leaves_no_right_now_figures_but_keeps_boards_and_history(
+    client, dashboard_data, clock,
+):
+    """Every board two hours old, as when the worker stops: nothing is presented as current."""
+    seed, context = dashboard_data
+    old = clock.instant - timedelta(hours=2)
+    seed({"train_code": "LATE1", "delay_minutes": 14, "fetched_at": old},
+         {"train_code": "LATE2", "station": "TARA", "delay_minutes": 7, "fetched_at": old})
+
+    home = client.get("/").get_data(as_text=True)
+    network = context["network"]
+    assert (network["trains"], network["on_time"], network["average_delay"], network["major"]) == (
+        0, None, None, 0)
+    assert (network["reporting"], network["excluded"], context["highest_delay"]) == (0, 2, None)
+    assert context["current_delays"] == []
+    assert "2 stations not updating; excluded" in home and "LATE1" not in home
+    assert context["summary"].trains == 2  # Today's performance keeps the day's readings.
+
+    client.get("/stations/CNLLY?view=delays")
+    assert [row.train_code for row in context["pagination"]["items"]] == ["LATE1"]
+    assert context["station_poll"]["stale"] is True

@@ -42,7 +42,7 @@
   {% set expected_clock, day_offset = row|expected_time %}
   <tr>
     <td class="service-time">{{ row.scheduled_time }}</td>
-    <td class="expected-time{{ ' unchanged' if row.delay_minutes == 0 else '' }}">{% if expected_clock %}<time>{{ expected_clock }}</time>{% if day_offset %}<small>{{ '+' if day_offset > 0 else '−' }}{{ day_offset|abs }} day{{ '' if day_offset|abs == 1 else 's' }}</small>{% endif %}{% else %}—{% endif %}</td>
+    <td class="expected-time{{ ' unchanged' if row.delay_minutes == 0 else '' }}">{% if expected_clock %}<time>{{ expected_clock }}</time>{% if day_offset %}<small>{{ '+' if day_offset > 0 else '−' }}{{ day_offset|abs }} day{{ '' if day_offset|abs == 1 else 's' }}</small>{% endif %}{% if row|clocks_went_back %}<small>clocks went back</small>{% endif %}{% else %}—{% endif %}</td>
     <th scope="row"><strong>{{ row.destination|place_name }}</strong>{% if station %}<small>{{ row|service_kind }}</small>{% endif %}{% if not station %}<small>Reported at <a href="{{ url_for('dashboard.station_detail', code=row.station) }}">{{ row.station|station_name }}</a></small>{% endif %}
       <details class="reading-details"><summary>Service details</summary>
         <p>Train {{ row.train_code }}</p>

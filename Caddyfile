@@ -1,0 +1,21 @@
+# Production reverse proxy; see docs/operations.md#https.
+# Caddy obtains and renews the certificate from Let's Encrypt with the HTTP-01 challenge on
+# port 80, and keeps it in the caddy_data volume.
+{
+	# Port 443 is published for TCP only, so do not advertise HTTP/3 (UDP).
+	servers {
+		protocols h1 h2
+	}
+}
+
+dublinrailtracker.duckdns.org {
+	# Short max-age while HSTS is new; see docs/operations.md#https.
+	header Strict-Transport-Security "max-age=300"
+	reverse_proxy web:8000
+}
+
+# Any other host name, including the bare IP address, over HTTP. Caddy answers the ACME
+# challenge before these routes run.
+http:// {
+	redir https://dublinrailtracker.duckdns.org{uri} 308
+}

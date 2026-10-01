@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ArrayOfObjTrainPositions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns="http://api.irishrail.ie/realtime/">
+  <objTrainPositions>
+    <TrainStatus>R</TrainStatus>
+    <TrainLatitude>53.2364</TrainLatitude>
+    <TrainLongitude>-6.11691</TrainLongitude>
+    <TrainCode>E846  </TrainCode>
+    <TrainDate>25 Sep 2026</TrainDate>
+    <PublicMessage>E846\n21:39 - Bray to Malahide (0 mins late)\nArrived Shankill next stop Killiney</PublicMessage>
+    <Direction>Northbound</Direction>
+  </objTrainPositions>
+  <objTrainPositions>
+    <TrainStatus>R</TrainStatus>
+    <TrainLatitude>53.2951</TrainLatitude>
+    <TrainLongitude>-6.13498</TrainLongitude>
+    <TrainCode>E130</TrainCode>
+    <TrainDate>25 Sep 2026</TrainDate>
+    <PublicMessage>E130\n20:46 - Howth to Greystones (6 mins late)\nDeparted Dun Laoghaire next stop Sandycove</PublicMessage>
+    <Direction>Southbound</Direction>
+  </objTrainPositions>
+  <objTrainPositions>
+    <TrainStatus>R</TrainStatus>
+    <TrainLatitude>53.0371</TrainLatitude>
+    <TrainLongitude>-7.30086</TrainLongitude>
+    <TrainCode>A230</TrainCode>
+    <TrainDate>25 Sep 2026</TrainDate>
+    <PublicMessage>A230\n21:00 - Dublin Heuston to Cork (0 mins late)\nDeparted Portlaoise next stop Ballybrophy</PublicMessage>
+    <Direction>To Cork</Direction>
+  </objTrainPositions>
+  <objTrainPositions>
+    <TrainStatus>N</TrainStatus>
+    <TrainLatitude>53.1442</TrainLatitude>
+    <TrainLongitude>-6.06085</TrainLongitude>
+    <TrainCode>E949</TrainCode>
+    <TrainDate>25 Sep 2026</TrainDate>
+    <PublicMessage>E949\nGreystones to Howth\nExpected Departure 21:50</PublicMessage>
+    <Direction>Northbound</Direction>
+  </objTrainPositions>
+  <objTrainPositions>
+    <TrainStatus>R</TrainStatus>
+    <TrainLatitude>not-a-latitude</TrainLatitude>
+    <TrainLongitude>-6.2</TrainLongitude>
+    <TrainCode>E999</TrainCode>
+    <TrainDate>25 Sep 2026</TrainDate>
+    <PublicMessage>E999\nMalformed record</PublicMessage>
+    <Direction>Northbound</Direction>
+  </objTrainPositions>
+  <objTrainPositions>
+    <TrainStatus>R</TrainStatus>
+    <TrainLatitude>0</TrainLatitude>
+    <TrainLongitude>0</TrainLongitude>
+    <TrainCode>D424</TrainCode>
+    <TrainDate>25 Sep 2026</TrainDate>
+    <PublicMessage>D424\n21:30 - Grand Canal Dock to Hazelhatch (0 mins late)\nDeparted North Strand Junction next stop Drumcondra</PublicMessage>
+    <Direction>Southbound</Direction>
+  </objTrainPositions>
+</ArrayOfObjTrainPositions>

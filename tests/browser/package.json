@@ -1,0 +1,12 @@
+{
+  "name": "irish-rail-map-review",
+  "private": true,
+  "type": "module",
+  "description": "Browser review of the live map against a disposable local stack.",
+  "scripts": {
+    "review": "node map-review.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

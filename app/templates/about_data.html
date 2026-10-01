@@ -4,18 +4,19 @@
   <div class="page-heading"><h1>How the data works</h1><p>Reported delays, with their limits in view.</p></div>
   <h2>Every five minutes</h2>
   <p>We poll selected stations using Iarnród Éireann's <a href="https://api.irishrail.ie/realtime/realtime.asmx">public realtime API</a> every 5 minutes. Pages refresh every 60 seconds. All displayed times use Europe/Dublin, including daylight saving time.</p>
+  <p>The API gives local times without a clock-change marker. When clocks go back, a repeated time such as 01:30 is taken as the first one, before the change; if a train's expected time then reads earlier than its schedule, we note “clocks went back”. When clocks go forward, a skipped time such as 01:30 is read as 02:30.</p>
   <h2>What “late” means</h2>
   <p>The API's Late field reports delay in minutes. “On time” in the headline means early or no more than 1 minute late. Scheduled times are timetable times, using the arrival time for terminating trains.</p>
   <h2>A last reading, not a confirmed arrival</h2>
   <p>Each new poll replaces the stored reading for that train at that station on that date. The retained value is the last reading before a train leaves the board, not a confirmed arrival delay. A reading can change while the train remains on the board.</p>
   <p>Earlier updates are overwritten.</p>
-  <p>Current boards and network figures use only trains in each station’s latest stored poll when it is no more than 10 minutes old. Today’s performance keeps each train’s latest reading for the day, even after it leaves the board. Details show the train code and available earlier readings at other stations; they are not a complete poll history or a live train location.</p>
+  <p>Current boards and network figures use only trains in each station’s latest successful poll. Every poll is recorded: an empty board clears the station, and after a failed update the last successful board stays visible, marked as not current. Today’s performance keeps each train’s latest reading for the day, even after it leaves the board. Details show the train code and available earlier readings at other stations; they are not a complete poll history or a live train location.</p>
   <h2>Coverage and gaps</h2>
-  <p>A monitored station is up to date when it has any reading in the last 30 minutes. Limited coverage means fewer than all monitored stations have recent readings. Stations with stored data outside the configured list are labelled “Not currently monitored”.</p>
-  <p>We do not store empty successful fetches or fetch failures. A gap could reflect no trains on the board, a connection problem, or missing API data; we cannot distinguish these from the stored readings. A network figure describes tracked trains, not the whole railway.</p>
+  <p>A monitored station is reporting when its latest poll succeeded in the last {{ max_update_minutes() }} minutes, including a poll that returned no services. Limited coverage means fewer than all monitored stations are reporting. Stations with stored data outside the configured list are labelled “Not currently monitored”.</p>
+  <p>For each station we keep the outcome of its latest poll: trains returned, no services returned, or a failed update. This is the latest outcome only, not a history of every poll. An empty board is a normal result, often overnight, and is shown as “No services returned”. After a failed update, or once a station’s latest successful poll is {{ max_update_minutes() }} minutes old, its last board stays visible on its station page and the map, marked as not current, and is left out of current network figures. The Data status page shows each station’s latest poll. A network figure describes tracked trains, not the whole railway.</p>
   <h2>Starts, calls and terminations</h2>
   <p>“Terminates here” means the destination matches the station name; “Starts here” means the origin matches. Otherwise we show “Calling service”. These labels are name-based inferences, so differences in names can affect them.</p>
   <h2>Independent project</h2>
-  <p>Built and maintained by Daniel English. This is an independent project, not affiliated with Iarnród Éireann, using their public realtime API.</p>
+  <p>Dublin Rail Tracker is built and maintained by Daniel English. It is an independent project, not affiliated with Iarnród Éireann, using their public realtime API.</p>
 </article>
 {% endblock %}

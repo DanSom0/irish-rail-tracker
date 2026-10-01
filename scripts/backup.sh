@@ -3,7 +3,8 @@ set -euo pipefail
 
 AWS_CLI_VERSION=2.36.49
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=scripts/app-dir.sh
+source "$(dirname "${BASH_SOURCE[0]}")/app-dir.sh"
 # shellcheck disable=SC1091
 source ./.env
 : "${BACKUP_BUCKET:?Set BACKUP_BUCKET in .env}"
