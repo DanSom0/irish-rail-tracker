@@ -3,12 +3,7 @@
 {% block content %}
 <div class="page-heading"><p class="eyebrow">Collection health</p><h1>Data status</h1><p>The outcome and time of each station's latest poll.</p></div>
 {{ freshness(last_updated, age_minutes) }}
-<section class="status-summary card">{{ coverage_label(coverage) }}<p class="note">Reporting means the station's latest poll succeeded in the last {{ max_update_minutes() }} minutes, even if it returned no services. After a failed update, the last successful board stays visible, marked as not current.</p></section>
-<section class="status-summary card" aria-labelledby="disk-heading">
-  <div class="section-heading card-heading"><h2 id="disk-heading">Server disk</h2>{% if disk and disk.high %}<span class="badge major">Above {{ disk.warning_percent }}%</span>{% endif %}</div>
-  {% if disk %}<p>{{ disk.used_percent }}% used · {{ disk.free_bytes|filesizeformat(true) }} free of {{ disk.total_bytes|filesizeformat(true) }}</p>
-  <p class="note">The database, app images and logs share this disk. Above {{ disk.warning_percent }}%, the app logs a warning on every fetch cycle.</p>{% else %}<p>Disk usage is unavailable.</p>{% endif %}
-</section>
+<section class="status-summary card">{{ coverage_label(coverage) }}<p class="note">Reporting means the station's latest poll succeeded in the last {{ max_update_minutes() }} minutes, even if it returned no services.</p></section>
 <section class="card" aria-labelledby="status-heading">
   <div class="section-heading card-heading"><h2 id="status-heading">Latest station update</h2><span>Alphabetical by station</span></div>
   {% if not coverage.reporting %}{{ empty_state("No monitored station has a successful poll in the last " ~ max_update_minutes() ~ " minutes.") }}{% endif %}

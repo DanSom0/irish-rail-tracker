@@ -491,33 +491,17 @@ def test_status_flags_failed_and_old_boards_as_stale_at_any_hour(
     assert context["coverage"]["reporting"] == 2
 
 
-@pytest.mark.parametrize("used,free,shown,badge", [
-    (54, 146, "27% used · 146 Bytes free of 200 Bytes", False),
-    (161, 39, "81% used · 39 Bytes free of 200 Bytes", True),
-])
-def test_status_shows_disk_usage_and_warning(
-    client, dashboard_data, monkeypatch, caplog, used, free, shown, badge,
-):
+def test_status_does_not_show_disk_usage(client, dashboard_data, monkeypatch, caplog):
     seed, _ = dashboard_data
     seed({})
+    # A nearly full disk: the worker logs it, but the public page neither shows nor checks it.
     monkeypatch.setattr("app.disk.shutil.disk_usage",
-                        lambda path: SimpleNamespace(total=200, used=used, free=free))
-    page = client.get("/status").get_data(as_text=True)
-    assert shown in page
-    assert ('<span class="badge major">Above 80%</span>' in page) is badge
-    assert ("disk_usage_high" in caplog.text) is badge
-
-
-def test_status_renders_when_disk_usage_is_unavailable(client, dashboard_data, monkeypatch):
-    seed, _ = dashboard_data
-    seed({})
-
-    def fail(path):
-        raise OSError("gone")
-    monkeypatch.setattr("app.disk.shutil.disk_usage", fail)
+                        lambda path: SimpleNamespace(total=200, used=190, free=10))
     response = client.get("/status")
+    page = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert "Disk usage is unavailable." in response.get_data(as_text=True)
+    assert "disk" not in page.casefold() and "95% used" not in page
+    assert "disk_usage_high" not in caplog.text
 
 
 def test_dashboard_queries_are_constant_with_many_stations(app, client, dashboard_data, monkeypatch):
@@ -859,12 +843,13 @@ def test_methodology_and_problem_link(client, dashboard_data):
     page = client.get("/about/data").get_data(as_text=True)
     for text in ("every 5 minutes", "Late field", "not a confirmed arrival delay",
                  "succeeded in the last 15 minutes", "No services returned",
-                 "not a history of every poll", "marked as not current",
+                 "marked as not current",
                  "left out of current network figures",
                  "not affiliated with Iarnród Éireann",
                  "public realtime API", "name-based inferences"):
         assert text in page
-    for obsolete in ("30 minutes", "We do not store"):
+    for obsolete in ("30 minutes", "We do not store", "Pages refresh every 60 seconds",
+                     "not a history of every poll", "Earlier updates are overwritten."):
         assert obsolete not in page
     for path in ("/", "/stations", "/stations/CNLLY", "/routes", "/status",
                  "/about/data", "/missing"):
@@ -903,7 +888,7 @@ def test_figure_explanations_are_disclosed_while_headlines_and_warnings_remain_v
     assert "Updated 16 minutes ago" in before_details
     assert "Limited coverage" in before_details
     assert "1 station not updating; excluded" in before_details
-    assert "Coverage means" in explanation and "Today: based on 1 train" in explanation
+    assert "A station is reporting if it updated in the last 15 minutes" in explanation and "Today: based on 1 train" in explanation
     assert "On time includes early trains" in explanation
     assert home.count('<details class="figures-details">') == 1
     assert '<dl class="daily-metrics">' in home and "Trains tracked" in home
@@ -1296,7 +1281,6 @@ def test_patterns_thresholds_and_worst_ignore_sparse_cells(client, dashboard_dat
     assert page.count('class="heat-cell heat-empty"') == 36
     assert page.count("No data collected") == 5
     assert all(label in page for label in ("Under 2 min", "2–5 min", "5–10 min", "10+ min", "Too little data", "No data"))
-    assert "Some hours have too little data to compare." in page
     assert "Scheduled time" in page and "Average delay in minutes" in page
     assert '<div class="visually-hidden"><table>' in page
 
@@ -1325,8 +1309,6 @@ def test_patterns_scope_and_empty_state(client, dashboard_data):
     assert context["first_date"].isoformat() == "2026-09-21"
     assert "Historical data only" in historical_page
     assert "Data from 21 September 2026" in historical_page
-    assert "Earlier updates are overwritten." not in historical_page
-    assert "Earlier updates are overwritten." in client.get("/about/data").get_data(as_text=True)
     client.get("/patterns?station=INVALID")
     assert context["station"] == ""  # Existing query-filter behaviour: reset to all monitored.
     assert context["cells"][(2, 9)].readings == 1

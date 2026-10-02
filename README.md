@@ -21,7 +21,7 @@ Dublin Rail Tracker is a live dashboard of train delays at 20 Dublin-area statio
 - **Route performance:** average delay by origin and destination, today or yesterday.
 - **Delay patterns:** a heatmap of average delay by weekday and scheduled hour.
 - **Live map:** station delay markers and each train's last reported position.
-- **Data status:** each station's latest poll ("OK, N trains", "No services returned", "Update failed; showing data from HH:MM"), disk use, `/health` and `/health/ingestion`.
+- **Data status:** each station's latest poll ("OK, N trains", "No services returned", "Update failed; showing data from HH:MM"), `/health` and `/health/ingestion`.
 
 ## Architecture
 
@@ -65,7 +65,7 @@ flowchart LR
 - **Migrations:** Alembic owns the schema. Each migration must keep working with the previous release, because rollback does not run migrations.
 - **Backups:** a nightly `pg_dump` goes to a private, encrypted S3 bucket.
   - **Restore check:** on 28 Sep 2026 a backup was restored into a scratch database, and its row counts matched production. This was a manual check; automated restore checks are [#45](https://github.com/DanSom0/irish-rail-tracker/issues/45).
-- **Disk:** container logs are capped, only the current and two previous release images are kept, and `/status` shows disk use.
+- **Disk:** container logs are capped, only the current and two previous release images are kept, and the worker logs a warning above 80% use.
 - **HTTPS:** Caddy terminates TLS with an automatic Let's Encrypt certificate and redirects all plain HTTP, including requests to the bare IP, to the site. It sends HSTS with a short `max-age`. The worker fetches the station feed over HTTPS.
 - **Health:** `/health` is liveness (web and database, plus the running release). `/health/ingestion` is readiness: it returns HTTP 503 if the worker has not finished a fetch cycle recently, and counts stations by poll outcome.
 
