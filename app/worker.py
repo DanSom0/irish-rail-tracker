@@ -18,7 +18,7 @@ def main() -> None:
     def fetch() -> None:
         with app.app_context():
             run_fetch_cycle(app)
-        # Logged every cycle, so a filling disk is noticed without anyone opening /status.
+        # Logged every cycle, so a filling disk shows up in the worker logs.
         check_disk_usage()
 
     scheduler = BlockingScheduler(timezone="UTC")

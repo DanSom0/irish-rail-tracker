@@ -1,4 +1,4 @@
-"""Root filesystem usage, shared by /status and the worker."""
+"""Root filesystem usage, logged by the worker."""
 
 import logging
 import math
