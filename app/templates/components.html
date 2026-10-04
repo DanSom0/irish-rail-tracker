@@ -19,7 +19,7 @@
     <div><dt>Average delay</dt><dd>{{ summary.average_delay|delay_text }}</dd></div>
     <div><dt>Trains tracked</dt><dd>{{ summary.trains }}</dd></div>
   </dl>
-  {% if show_details %}<details class="figures-details"><summary>About these figures</summary><p>Based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}. On time includes early trains and delays of up to 1 minute. Today's figures count each train once using its latest stored reading for the day, even after it leaves the board.</p></details>{% endif %}
+  {% if show_details %}<details class="figures-details"><summary>About these figures</summary><p>Based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}. On time includes early trains and delays of up to 1 minute. Each train counts once, using its last reported delay.</p></details>{% endif %}
   {% else %}{{ empty_state("Today's performance is not yet available because no readings have been stored for today.") }}{% endif %}
 </section>
 {% endmacro %}
@@ -49,7 +49,7 @@
         <p>From {{ row.origin|place_name }} · {{ row.train_date }}</p>
         {{ freshness(row.fetched_at, row.fetched_at|minutes_ago) }}
         {% if reading_details.get(row.id) %}<ul>{% for reading in reading_details[row.id] %}<li>{{ reading.station|station_name }} · {{ delay_badge(reading.delay_minutes) }}{{ freshness(reading.fetched_at, reading.fetched_at|minutes_ago) }}</li>{% endfor %}</ul>{% endif %}
-        <p>Latest stored reading per station; earlier polls at the same station are replaced. The reporting station is not a live train location.</p>
+        <p>Latest reading at each station. The reporting station is not the train's live location.</p>
       </details>
     </th>
     <td class="numeric">{{ delay_badge(row.delay_minutes) }}</td>
@@ -57,7 +57,7 @@
   {% endfor %}
   </tbody>
 </table>
-{% else %}{{ empty_state("No recent readings match this service view. Try the other board view or check after the next poll.") }}{% endif %}
+{% else %}{{ empty_state("No recent readings match this service view. Try the other board view or check back in a few minutes.") }}{% endif %}
 {% endmacro %}
 
 {% macro pagination_links(pagination, endpoint, station='', code=none, view=none, day=none) %}

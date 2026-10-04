@@ -25,8 +25,8 @@
     <p class="network-freshness">{{ coverage.reporting }}/{{ coverage.total }} stations reporting{% if last_updated %} · <time datetime="{{ last_updated.isoformat() }}" title="{{ last_updated|dublin_time }}">Updated {{ age_minutes|age_text }}{% if age_minutes %} ago{% endif %}</time>{% endif %}{% if coverage.reporting < coverage.total %} · Limited coverage{% endif %}{% if network.excluded %} · {{ network.excluded }} station{{ '' if network.excluded == 1 else 's' }} not updating; excluded{% endif %}</p>
     <details class="figures-details"><summary>About these figures</summary>
       <p>Current figures: based on {{ network.trains }} train{{ '' if network.trains == 1 else 's' }}{% if network.total %} across {{ network.total }} monitored station{{ '' if network.total == 1 else 's' }}{% else %}; the selected station is not currently monitored{% endif %}. Today: based on {{ summary.trains }} train{{ '' if summary.trains == 1 else 's' }}.</p>
-      <p>Coverage means a monitored station's latest poll succeeded in the last {{ max_update_minutes() }} minutes, including a poll that returned no services. Current services use only each station's latest successful poll. Stations whose latest poll failed, or whose latest successful poll is {{ max_update_minutes() }} minutes old or more, are excluded from current figures; their last board stays on the station page, marked as not current.</p>
-      <p>On time includes early trains and trains up to 1 minute late. Today's figures count each train once using its latest stored reading for the day, even after it leaves the board.</p>
+      <p>A station is reporting if it updated in the last {{ max_update_minutes() }} minutes, even with no services. Stations that haven't are left out of current figures.</p>
+      <p>On time includes early trains and trains up to 1 minute late. Today's figures count each train once, using its last reported delay.</p>
     </details>
   </div>
 </section>
@@ -34,7 +34,7 @@
 <section class="current-delays" aria-labelledby="delays-heading">
   <div class="section-heading"><h2 id="delays-heading">Largest current delays</h2><span>2+ minutes late</span></div>
   {% if current_delays %}{{ services(current_delays, reading_details) }}
-  {% elif network.trains %}<p class="no-delays">No significant delays in the latest readings · {{ 'limited coverage; only reporting stations are represented' if coverage.reporting < coverage.total else 'all monitored stations up to date' }}.</p>
+  {% elif network.trains %}<p class="no-delays">No significant delays in the latest readings{{ ' · limited coverage; only reporting stations are represented' if coverage.reporting < coverage.total else '' }}.</p>
   {% else %}<p class="no-delays">Current delays are unavailable until a monitored station returns fresh readings.</p>{% endif %}
 </section>
 {{ daily(summary, today, false) }}

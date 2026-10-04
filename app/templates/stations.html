@@ -12,6 +12,6 @@
       {% endfor %}
     </tbody></table>
   </div>
-{% else %}{{ empty_state("Station averages are unavailable because no readings have been stored today and no current station board is available.") }}{% endif %}
+{% else %}{{ empty_state("Station averages are unavailable: no readings yet today.") }}{% endif %}
 </section>
 {% endblock %}
